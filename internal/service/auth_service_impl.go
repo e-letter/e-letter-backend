@@ -180,8 +180,6 @@ func (s *authService) IssueAdminTokens(adminUsername string) (string, string, in
 	return accessToken, refreshToken, adminUser.ID, nil
 }
 
-
-
 func (s *authService) Refresh(refreshToken string) (string, string, error) {
 	if refreshToken == "" {
 		return "", "", errors.New("Token refresh tidak disediakan")

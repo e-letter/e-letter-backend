@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -208,25 +209,38 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 	}
 	defer tx.Rollback()
 
-	var requestTypeID int
-	if err := tx.QueryRow(`SELECT request_type_id FROM requests WHERE id = ? FOR UPDATE`, req.RequestID).Scan(&requestTypeID); err != nil {
+	// 1. Validate approval step & role authority
+	callerTeacherID, _, approverRole, isDelegated, delegatedFromID, err := ValidateApprovalStep(tx, req.RequestID, req.StageID, approverID)
+	if err != nil {
 		return err
 	}
 
-	var stageExists bool
-	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM approval_flow_templates WHERE step_no = ? AND request_type_id = ?)`, req.StageID, requestTypeID).Scan(&stageExists); err != nil {
-		return err
+	// 2. Perform the update based on role and delegation
+	var res sql.Result
+	if isDelegated {
+		res, err = tx.Exec(
+			`UPDATE request_approvals
+			 SET status = ?, notes = ?, signature_url = ?, acted_at = NOW(), updated_at = NOW(),
+			     is_delegated = 1, delegated_from_id = ?, approver_teacher_id = ?
+			 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
+			req.Status, req.Notes, req.SignatureURL, delegatedFromID, callerTeacherID, req.RequestID, req.StageID,
+		)
+	} else if approverRole == "tatib" {
+		res, err = tx.Exec(
+			`UPDATE request_approvals
+			 SET status = ?, notes = ?, signature_url = ?, acted_at = NOW(), updated_at = NOW(),
+			     approver_teacher_id = ?
+			 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
+			req.Status, req.Notes, req.SignatureURL, callerTeacherID, req.RequestID, req.StageID,
+		)
+	} else {
+		res, err = tx.Exec(
+			`UPDATE request_approvals
+			 SET status = ?, notes = ?, signature_url = ?, acted_at = NOW(), updated_at = NOW()
+			 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
+			req.Status, req.Notes, req.SignatureURL, req.RequestID, req.StageID,
+		)
 	}
-	if !stageExists {
-		return fmt.Errorf("approval step not found or does not belong to request type")
-	}
-
-	// UPDATE existing approval row instead of INSERT
-	res, err := tx.Exec(
-		`UPDATE request_approvals SET status = ?, notes = ?, signature_url = ?, acted_at = NOW(), updated_at = NOW()
-		 WHERE request_id = ? AND step_no = ?`,
-		req.Status, req.Notes, req.SignatureURL, req.RequestID, req.StageID,
-	)
 	if err != nil {
 		return err
 	}
@@ -238,7 +252,7 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		return fmt.Errorf("approval step not found for this request")
 	}
 
-	// Determine request status: stays 'pending' unless all required steps done or one rejected
+	// 3. Determine request status: stays 'pending' unless all required steps done or one rejected
 	targetStatus := "pending"
 	if req.Status == "rejected" {
 		targetStatus = "rejected"
@@ -256,7 +270,18 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		}
 	}
 
-	if _, err := tx.Exec(`UPDATE requests SET status = ?, updated_at = NOW() WHERE id = ?`, targetStatus, req.RequestID); err != nil {
+	// Calculate and update current_step if this step is successfully approved
+	var currentStep int
+	if req.Status == "approved" || req.Status == "skipped" {
+		currentStep = req.StageID
+	} else {
+		currentStep = req.StageID - 1
+		if currentStep < 0 {
+			currentStep = 0
+		}
+	}
+
+	if _, err := tx.Exec(`UPDATE requests SET status = ?, current_step = ?, updated_at = NOW() WHERE id = ?`, targetStatus, currentStep, req.RequestID); err != nil {
 		return err
 	}
 
@@ -393,14 +418,13 @@ func (r *permissionRepository) GetRequestDetail(requestID int) (any, error) {
 		return nil, err
 	}
 
-	// Get approval steps
 	rows, err := r.db.Query(`
 		SELECT ra.id, ra.step_no, ra.approver_role, ra.status, ra.notes, ra.signature_url, ra.acted_at,
-		       COALESCE(tp.full_name, '') as approver_name
+		       COALESCE(tp.full_name, pp.full_name, '') as approver_name
 		FROM request_approvals ra
-		LEFT JOIN users u ON u.id = ra.approver_user_id
-		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
-		WHERE ra.request_id = ?
+		LEFT JOIN teacher_profiles tp ON tp.id = ra.approver_teacher_id
+		LEFT JOIN principal_profiles pp ON pp.id = ra.approver_principal_id
+		WHERE ra.request_id = ? AND ra.deleted_at IS NULL
 		ORDER BY ra.step_no
 	`, requestID)
 	if err != nil {
@@ -460,7 +484,7 @@ func (r *permissionRepository) GetTeacherRoles(userID int) (any, error) {
 	return roles, nil
 }
 
-func (r *permissionRepository) RequestTeacherRole(userID int, roleName string) error {
+func (r *permissionRepository) RequestTeacherRole(userID int, roleName string, meta domain.TeacherRoleMetadata) error {
 	var teacherID int
 	err := r.db.QueryRow(`SELECT id FROM teacher_profiles WHERE user_id = ?`, userID).Scan(&teacherID)
 	if err != nil {
@@ -470,26 +494,151 @@ func (r *permissionRepository) RequestTeacherRole(userID int, roleName string) e
 	var academicYearID int
 	_ = r.db.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&academicYearID)
 
-	_, err = r.db.Exec(`INSERT INTO teacher_roles (teacher_id, role_name, academic_year_id, status) VALUES (?, ?, ?, 'pending')`,
-		teacherID, roleName, academicYearID)
+	// Build subject_ids as comma-separated string for storage in the staging column.
+	var subjectIDsStr *string
+	if len(meta.SubjectIDs) > 0 {
+		parts := make([]string, len(meta.SubjectIDs))
+		for i, id := range meta.SubjectIDs {
+			parts[i] = strconv.Itoa(id)
+		}
+		s := strings.Join(parts, ",")
+		subjectIDsStr = &s
+	}
+
+	_, err = r.db.Exec(
+		`INSERT INTO teacher_roles
+			(teacher_id, role_name, academic_year_id, status, homeroom_class_id, major_id, subject_ids)
+		 VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
+		teacherID, roleName, academicYearID,
+		meta.HomeroomClassID, meta.MajorID, subjectIDsStr,
+	)
+	return err
+}
+
+func (r *permissionRepository) ListPendingTeacherRoles(status string) ([]domain.PendingTeacherRole, error) {
+	if status == "" {
+		status = "pending"
+	}
+	rows, err := r.db.Query(`
+		SELECT
+			tr.id,
+			tp.id AS teacher_id,
+			u.id  AS teacher_user_id,
+			tp.full_name,
+			tr.role_name,
+			tr.status,
+			tr.homeroom_class_id,
+			c.class_name,
+			tr.major_id,
+			m.name AS major_name,
+			tr.subject_ids,
+			DATE_FORMAT(tr.created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at
+		FROM teacher_roles tr
+		JOIN teacher_profiles tp ON tp.id = tr.teacher_id
+		JOIN users u ON u.id = tp.user_id
+		LEFT JOIN classes c ON c.id = tr.homeroom_class_id
+		LEFT JOIN majors m ON m.id = tr.major_id
+		WHERE tr.status = ?
+		ORDER BY tr.created_at DESC
+	`, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []domain.PendingTeacherRole
+	for rows.Next() {
+		var rec domain.PendingTeacherRole
+		var className sql.NullString
+		var majorName sql.NullString
+		if err := rows.Scan(
+			&rec.ID, &rec.TeacherID, &rec.TeacherUserID, &rec.TeacherName,
+			&rec.RoleName, &rec.Status,
+			&rec.HomeroomClassID, &className,
+			&rec.MajorID, &majorName,
+			&rec.SubjectIDs,
+			&rec.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if className.Valid {
+			rec.HomeroomClass = &className.String
+		}
+		if majorName.Valid {
+			rec.MajorName = &majorName.String
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func (r *permissionRepository) RejectTeacherRole(id, adminUserID int, _ string) error {
+	_, err := r.db.Exec(
+		`UPDATE teacher_roles SET status = 'rejected', verified_by = ?, verified_at = NOW(), updated_at = NOW() WHERE id = ?`,
+		adminUserID, id,
+	)
 	return err
 }
 
 func (r *permissionRepository) CreateDelegation(userID, delegateUserID int, validFrom, validUntil, reason string) error {
-	_, err := r.db.Exec(`
-		INSERT INTO request_approval_delegates (original_approver_id, delegate_approver_id, valid_from, valid_until, reason)
-		VALUES (?, ?, ?, ?, ?)
-	`, userID, delegateUserID, validFrom, validUntil, reason)
-	return err
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var originalTeacherID int64
+	err = tx.QueryRow(`SELECT id FROM teacher_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL`, userID).Scan(&originalTeacherID)
+	if err != nil {
+		return fmt.Errorf("profil guru pemberi delegasi tidak aktif: %w", err)
+	}
+
+	var delegateTeacherID int64
+	err = tx.QueryRow(`SELECT id FROM teacher_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL`, delegateUserID).Scan(&delegateTeacherID)
+	if err != nil {
+		return fmt.Errorf("profil guru penerima delegasi tidak aktif: %w", err)
+	}
+
+	// Fetch active roles for the original teacher
+	rows, err := tx.Query(`SELECT role_name FROM teacher_roles WHERE teacher_id = ? AND status = 'active'`, originalTeacherID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var roles []string
+	for rows.Next() {
+		var role string
+		if err := rows.Scan(&role); err == nil {
+			roles = append(roles, role)
+		}
+	}
+
+	if len(roles) == 0 {
+		return fmt.Errorf("guru pemberi delegasi tidak memiliki peran aktif yang dapat didelegasikan")
+	}
+
+	for _, role := range roles {
+		_, err = tx.Exec(`
+			INSERT INTO request_approval_delegates (original_teacher_id, delegate_teacher_id, delegate_role, valid_from, valid_until, reason, created_by_user_id, is_active)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+		`, originalTeacherID, delegateTeacherID, role, validFrom, validUntil, reason, userID)
+		if err != nil {
+			return fmt.Errorf("gagal membuat delegasi untuk peran %s: %w", role, err)
+		}
+	}
+
+	return tx.Commit()
 }
 
 func (r *permissionRepository) ListDelegations(userID int) (any, error) {
 	rows, err := r.db.Query(`
-		SELECT rad.id, rad.delegate_approver_id, rad.valid_from, rad.valid_until, rad.reason,
-		       COALESCE(tp.full_name, '') as delegate_name
+		SELECT rad.id, tp_del.user_id as delegate_user_id, rad.valid_from, rad.valid_until, rad.reason,
+		       COALESCE(tp_del.full_name, '') as delegate_name
 		FROM request_approval_delegates rad
-		LEFT JOIN teacher_profiles tp ON tp.user_id = rad.delegate_approver_id
-		WHERE rad.original_approver_id = ? AND rad.valid_until >= NOW()
+		JOIN teacher_profiles tp_orig ON tp_orig.id = rad.original_teacher_id
+		JOIN teacher_profiles tp_del ON tp_del.id = rad.delegate_teacher_id
+		WHERE tp_orig.user_id = ? AND rad.valid_until >= NOW() AND rad.is_active = 1
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -516,13 +665,19 @@ func (r *permissionRepository) ListDelegations(userID int) (any, error) {
 }
 
 func (r *permissionRepository) DeleteDelegation(id, userID int) error {
-	res, err := r.db.Exec(`DELETE FROM request_approval_delegates WHERE id = ? AND original_approver_id = ?`, id, userID)
+	var originalTeacherID int64
+	err := r.db.QueryRow(`SELECT id FROM teacher_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL`, userID).Scan(&originalTeacherID)
+	if err != nil {
+		return fmt.Errorf("profil guru pemberi delegasi tidak aktif: %w", err)
+	}
+
+	res, err := r.db.Exec(`UPDATE request_approval_delegates SET is_active = 0 WHERE id = ? AND original_teacher_id = ?`, id, originalTeacherID)
 	if err != nil {
 		return err
 	}
 	rows, _ := res.RowsAffected()
 	if rows == 0 {
-		return errors.New("Delegasi tidak ditemukan")
+		return errors.New("delegasi tidak ditemukan atau tidak berwenang menghapus")
 	}
 	return nil
 }

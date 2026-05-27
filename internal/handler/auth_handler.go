@@ -109,7 +109,6 @@ func (h *AuthHandler) AdminLogin(c *gin.Context) {
 	})
 }
 
-
 func (h *AuthHandler) Refresh(c *gin.Context) {
 	refreshToken, err := c.Cookie("refreshToken")
 	if err != nil {

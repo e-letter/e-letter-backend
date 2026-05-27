@@ -26,14 +26,14 @@ type AppConfig struct {
 }
 
 type DBConfig struct {
-	Host          string
-	Port          string
-	User          string
-	Password      string
-	Name          string
-	MaxOpenConns  int
-	MaxIdleConns  int
-	ConnMaxLife   time.Duration
+	Host            string
+	Port            string
+	User            string
+	Password        string
+	Name            string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLife     time.Duration
 	ConnMaxIdleTime time.Duration
 }
 

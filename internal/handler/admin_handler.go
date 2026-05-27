@@ -2,8 +2,10 @@ package handler
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Refliqx/backend-eletter/internal/response"
 	"github.com/gin-gonic/gin"
@@ -67,14 +69,14 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	defer rows.Close() 	
+	defer rows.Close()
 
 	type User struct {
-		ID       int    `json:"id"`
+		ID       int     `json:"id"`
 		Email    *string `json:"email"`
-		Role     string `json:"role"`
-		Status   string `json:"status"`
-		FullName string `json:"full_name"`
+		Role     string  `json:"role"`
+		Status   string  `json:"status"`
+		FullName string  `json:"full_name"`
 	}
 	var users []User
 	for rows.Next() {
@@ -163,12 +165,247 @@ func (h *AdminHandler) DeleteRegistrationToken(c *gin.Context) {
 
 func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 	id := c.Param("id")
-	_, err := h.db.Exec(`UPDATE teacher_roles SET status = 'active', verified_at = NOW(), verified_by = 0 WHERE id = ?`, id)
+	adminUserID := toIntFromContext(c, "userId")
+
+	tx, err := h.db.Begin()
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Peran guru berhasil diverifikasi"})
+	defer tx.Rollback()
+
+	// Lock the row and read metadata needed for assignment writes.
+	var roleName string
+	var teacherID int
+	var academicYearID int
+	var homeroomClassID sql.NullInt64
+	var majorID sql.NullInt64
+	var subjectIDsRaw sql.NullString
+	err = tx.QueryRow(
+		`SELECT role_name, teacher_id, COALESCE(academic_year_id, 0),
+		        homeroom_class_id, major_id, subject_ids
+		   FROM teacher_roles WHERE id = ? FOR UPDATE`,
+		id,
+	).Scan(&roleName, &teacherID, &academicYearID, &homeroomClassID, &majorID, &subjectIDsRaw)
+	if err != nil {
+		response.Error(c, http.StatusNotFound, "Role tidak ditemukan")
+		return
+	}
+
+	// Activate the role.
+	if _, err := tx.Exec(
+		`UPDATE teacher_roles SET status = 'active', verified_at = NOW(), verified_by = ? WHERE id = ?`,
+		adminUserID, id,
+	); err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Write to the canonical assignment table based on role type.
+	switch roleName {
+	case "wali_kelas":
+		if homeroomClassID.Valid {
+			// Deactivate any existing assignment for this class first (one class, one wali).
+			if _, err := tx.Exec(
+				`UPDATE class_homeroom_assignments SET is_active = 0, updated_at = NOW()
+				  WHERE class_id = ? AND academic_year_id = ?`,
+				homeroomClassID.Int64, academicYearID,
+			); err != nil {
+				response.Error(c, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if _, err := tx.Exec(
+				`INSERT INTO class_homeroom_assignments (class_id, teacher_id, academic_year_id, is_active)
+				 VALUES (?, ?, ?, 1)
+				 ON DUPLICATE KEY UPDATE is_active = 1, updated_at = NOW()`,
+				homeroomClassID.Int64, teacherID, academicYearID,
+			); err != nil {
+				response.Error(c, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+
+	case "kapro":
+		if majorID.Valid {
+			// Deactivate existing kapro for this major.
+			if _, err := tx.Exec(
+				`UPDATE major_head_assignments SET is_active = 0, updated_at = NOW()
+				  WHERE major_id = ? AND academic_year_id = ?`,
+				majorID.Int64, academicYearID,
+			); err != nil {
+				response.Error(c, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if _, err := tx.Exec(
+				`INSERT INTO major_head_assignments (major_id, teacher_id, academic_year_id, is_active)
+				 VALUES (?, ?, ?, 1)
+				 ON DUPLICATE KEY UPDATE is_active = 1, updated_at = NOW()`,
+				majorID.Int64, teacherID, academicYearID,
+			); err != nil {
+				response.Error(c, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+
+	case "guru_mapel":
+		if subjectIDsRaw.Valid && subjectIDsRaw.String != "" {
+			// Get all active classes for this academic year to create schedules.
+			rows, err := tx.Query(
+				`SELECT id FROM classes WHERE academic_year_id = ? AND is_active = 1`,
+				academicYearID,
+			)
+			if err != nil {
+				response.Error(c, http.StatusInternalServerError, err.Error())
+				return
+			}
+			var classIDs []int64
+			for rows.Next() {
+				var cid int64
+				_ = rows.Scan(&cid)
+				classIDs = append(classIDs, cid)
+			}
+			rows.Close()
+
+			// Parse comma-separated subject IDs.
+			parts := strings.Split(subjectIDsRaw.String, ",")
+			for _, part := range parts {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				subjectID, convErr := strconv.ParseInt(part, 10, 64)
+				if convErr != nil {
+					continue
+				}
+				for _, classID := range classIDs {
+					// Use senin as default day; the schedule can be updated by admin later.
+					// start_time/end_time default to school start (07:00 – 08:00).
+					if _, err := tx.Exec(
+						`INSERT IGNORE INTO schedules
+							(academic_year_id, class_id, subject_id, teacher_id,
+							 day_of_week, start_time, end_time, is_active)
+						VALUES (?, ?, ?, ?, 'senin', '07:00:00', '08:00:00', 1)`,
+						academicYearID, classID, subjectID, teacherID,
+					); err != nil {
+						response.Error(c, http.StatusInternalServerError,
+							fmt.Sprintf("Gagal membuat jadwal untuk subject %d kelas %d: %s", subjectID, classID, err.Error()))
+						return
+					}
+				}
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Peran guru berhasil diverifikasi dan penugasan dibuat"})
+}
+
+func (h *AdminHandler) ListPendingTeacherRoles(c *gin.Context) {
+	status := c.DefaultQuery("status", "pending")
+	rows, err := h.db.Query(`
+		SELECT
+			tr.id,
+			tp.id AS teacher_id,
+			u.id  AS teacher_user_id,
+			tp.full_name,
+			tr.role_name,
+			tr.status,
+			tr.homeroom_class_id,
+			c.class_name,
+			tr.major_id,
+			m.name AS major_name,
+			tr.subject_ids,
+			DATE_FORMAT(tr.created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at
+		FROM teacher_roles tr
+		JOIN teacher_profiles tp ON tp.id = tr.teacher_id
+		JOIN users u ON u.id = tp.user_id
+		LEFT JOIN classes c ON c.id = tr.homeroom_class_id
+		LEFT JOIN majors m ON m.id = tr.major_id
+		WHERE tr.status = ?
+		ORDER BY tr.created_at DESC
+	`, status)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+
+	type PendingRole struct {
+		ID            int     `json:"id"`
+		TeacherID     int     `json:"teacher_id"`
+		TeacherUserID int     `json:"teacher_user_id"`
+		TeacherName   string  `json:"teacher_name"`
+		RoleName      string  `json:"role_name"`
+		Status        string  `json:"status"`
+		ClassID       *int64  `json:"homeroom_class_id,omitempty"`
+		ClassName     *string `json:"homeroom_class,omitempty"`
+		MajorID       *int64  `json:"major_id,omitempty"`
+		MajorName     *string `json:"major_name,omitempty"`
+		SubjectIDs    *string `json:"subject_ids,omitempty"`
+		CreatedAt     string  `json:"created_at"`
+	}
+
+	var items []PendingRole
+	for rows.Next() {
+		var rec PendingRole
+		var classID sql.NullInt64
+		var className sql.NullString
+		var majorID sql.NullInt64
+		var majorName sql.NullString
+		var subjectIDs sql.NullString
+		if err := rows.Scan(
+			&rec.ID, &rec.TeacherID, &rec.TeacherUserID, &rec.TeacherName,
+			&rec.RoleName, &rec.Status,
+			&classID, &className,
+			&majorID, &majorName,
+			&subjectIDs,
+			&rec.CreatedAt,
+		); err != nil {
+			response.Error(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if classID.Valid {
+			rec.ClassID = &classID.Int64
+		}
+		if className.Valid {
+			rec.ClassName = &className.String
+		}
+		if majorID.Valid {
+			rec.MajorID = &majorID.Int64
+		}
+		if majorName.Valid {
+			rec.MajorName = &majorName.String
+		}
+		if subjectIDs.Valid {
+			rec.SubjectIDs = &subjectIDs.String
+		}
+		items = append(items, rec)
+	}
+	if items == nil {
+		items = []PendingRole{}
+	}
+	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": items})
+}
+
+func (h *AdminHandler) RejectTeacherRole(c *gin.Context) {
+	id := c.Param("id")
+	adminUserID := toIntFromContext(c, "userId")
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.ShouldBindJSON(&body) // reason is optional
+	_, err := h.db.Exec(
+		`UPDATE teacher_roles SET status = 'rejected', verified_by = ?, verified_at = NOW(), updated_at = NOW() WHERE id = ?`,
+		adminUserID, id,
+	)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Permintaan peran ditolak"})
 }
 
 func (h *AdminHandler) GetAcademicYears(c *gin.Context) {

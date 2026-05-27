@@ -15,4 +15,3 @@ func toIntFromContext(c *gin.Context, key string) int {
 	}
 	return 0
 }
-

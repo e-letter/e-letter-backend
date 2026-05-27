@@ -20,8 +20,6 @@ func NewAttachmentHandler(s service.AttachmentService) *AttachmentHandler {
 	return &AttachmentHandler{service: s}
 }
 
-
-
 func (h *AttachmentHandler) GetByID(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	attachment, err := h.service.GetByID(id)
@@ -79,7 +77,6 @@ func (h *AttachmentHandler) ListByRequest(c *gin.Context) {
 	}
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": items})
 }
-
 
 func (h *AttachmentHandler) Upload(c *gin.Context) {
 	requestID, _ := strconv.Atoi(c.PostForm("request_id"))

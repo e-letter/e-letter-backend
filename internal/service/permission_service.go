@@ -115,8 +115,8 @@ func (s *permissionService) GetTeacherRoles(userID int) (any, error) {
 	return s.repo.GetTeacherRoles(userID)
 }
 
-func (s *permissionService) RequestTeacherRole(userID int, roleName string) error {
-	return s.repo.RequestTeacherRole(userID, roleName)
+func (s *permissionService) RequestTeacherRole(userID int, roleName string, meta domain.TeacherRoleMetadata) error {
+	return s.repo.RequestTeacherRole(userID, roleName, meta)
 }
 
 func (s *permissionService) CreateDelegation(userID, delegateUserID int, validFrom, validUntil, reason string) error {

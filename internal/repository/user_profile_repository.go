@@ -21,21 +21,21 @@ func NewUserProfileRepository(db *sql.DB) UserProfileRepository {
 }
 
 func (r *userProfileRepository) GetByUserID(userID int) (*domain.User, error) {
-  // Special case for admin with userID=0 (no database user record)
-  if userID == 0 {
-    return &domain.User{
-      ID:                0,
-      Username:          strPtr("admin"),
-      Email:             strPtr("admin@system"),
-      Role:              "admin",
-      Status:            "active",
-      FullName:          strPtr("Administrator"),
-      CanRequestDispensasi: true,
-      ProfileCompleted: true,
-    }, nil
-  }
+	// Special case for admin with userID=0 (no database user record)
+	if userID == 0 {
+		return &domain.User{
+			ID:                   0,
+			Username:             strPtr("admin"),
+			Email:                strPtr("admin@system"),
+			Role:                 "admin",
+			Status:               "active",
+			FullName:             strPtr("Administrator"),
+			CanRequestDispensasi: true,
+			ProfileCompleted:     true,
+		}, nil
+	}
 
-  query := `
+	query := `
     SELECT u.id, u.username, u.email, u.role, u.status, u.password_hash,
            CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN tp.full_name
                 WHEN u.role = 'student' THEN sp.full_name
@@ -65,12 +65,12 @@ func (r *userProfileRepository) GetByUserID(userID int) (*domain.User, error) {
     WHERE u.id = ? AND u.deleted_at IS NULL
     LIMIT 1
   `
-  row := r.db.QueryRow(query, userID)
-  return scanUser(row)
+	row := r.db.QueryRow(query, userID)
+	return scanUser(row)
 }
 
 func strPtr(s string) *string {
-  return &s
+	return &s
 }
 
 func (r *userProfileRepository) Update(userID int, payload domain.UserProfileUpdateRequest) (*domain.User, error) {
@@ -86,19 +86,19 @@ func (r *userProfileRepository) Update(userID int, payload domain.UserProfileUpd
 		}
 	}
 
-// Determine which table to update based on user role
-  var userRole string
-  if err := tx.QueryRow(`SELECT role FROM users WHERE id = ?`, userID).Scan(&userRole); err != nil {
-    return nil, err
-  }
+	// Determine which table to update based on user role
+	var userRole string
+	if err := tx.QueryRow(`SELECT role FROM users WHERE id = ?`, userID).Scan(&userRole); err != nil {
+		return nil, err
+	}
 
-  // Admin users don't have profiles - just return current user
-  if userRole == "admin" {
-    return r.GetByUserID(userID)
-  }
+	// Admin users don't have profiles - just return current user
+	if userRole == "admin" {
+		return r.GetByUserID(userID)
+	}
 
-  // Handle class_id via student_class_enrollments (not direct column)
-  if payload.ClassID != nil && userRole == "student" {
+	// Handle class_id via student_class_enrollments (not direct column)
+	if payload.ClassID != nil && userRole == "student" {
 		// Get student profile ID
 		var studentProfileID int
 		err := tx.QueryRow(`SELECT id FROM student_profiles WHERE user_id = ?`, userID).Scan(&studentProfileID)

@@ -60,7 +60,7 @@ func (h *LetterHandler) GeneralDispensasi(c *gin.Context) {
 	page, limit := parsePagination(c)
 	resp, err := h.service.ListGeneralDispensasi("teacher", userID, page, limit)
 	if err != nil {
-		response.Raw(c, http.StatusInternalServerError, gin.H{"error": "Failed to fetch data: "+err.Error()})
+		response.Raw(c, http.StatusInternalServerError, gin.H{"error": "Failed to fetch data: " + err.Error()})
 		return
 	}
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": resp})
@@ -75,7 +75,7 @@ func (h *LetterHandler) TeacherLetters(c *gin.Context) {
 	page, limit := parsePagination(c)
 	resp, err := h.service.ListTeacherLetters(userID, page, limit)
 	if err != nil {
-		response.Raw(c, http.StatusInternalServerError, gin.H{"error": "Failed to fetch data: "+err.Error()})
+		response.Raw(c, http.StatusInternalServerError, gin.H{"error": "Failed to fetch data: " + err.Error()})
 		return
 	}
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": resp})
@@ -148,9 +148,6 @@ func (h *LetterHandler) TeacherPending(c *gin.Context) {
 	}
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": resp})
 }
-
-
-
 
 func (h *LetterHandler) TeacherStats(c *gin.Context) {
 	userID := toIntFromContext(c, "userId")

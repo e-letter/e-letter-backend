@@ -406,7 +406,7 @@ func scanLetterRows(rows *sql.Rows) ([]domain.LetterListItem, error) {
 		var (
 			id, title, description, status, fullName, className, nisn, email string
 			requestDate, createdAt, updatedAt                                time.Time
-			startTime, endTime                                              sql.NullTime
+			startTime, endTime                                               sql.NullTime
 		)
 		var idInt int
 		if err := rows.Scan(&idInt, &title, &description, &status, &requestDate, &createdAt, &updatedAt, &startTime, &endTime, &fullName, &className, &nisn, &email); err != nil {
@@ -494,22 +494,67 @@ func coalesceTitle(v string) string {
 func (r *letterRepository) ListGeneralDispensasi(userRole string, userID int, page, limit int) (*domain.PaginatedLetterResponse, error) {
 	offset := (page - 1) * limit
 	var totalItems int
-	err := r.db.QueryRow(`SELECT COUNT(*) FROM requests r JOIN request_types rt ON rt.id = r.request_type_id WHERE rt.code = 'dispensasi' AND r.deleted_at IS NULL`).Scan(&totalItems)
+
+	var countQuery string
+	var selectQuery string
+
+	if userRole == "teacher" {
+		scopeFilter, err := BuildRBACScopeFilter(r.db, userID)
+		if err != nil {
+			return nil, err
+		}
+
+		countQuery = fmt.Sprintf(`
+			SELECT COUNT(DISTINCT r.id)
+			FROM requests r
+			JOIN request_types rt ON rt.id = r.request_type_id
+			JOIN request_students rs ON rs.request_id = r.id
+			JOIN student_profiles sp ON sp.id = rs.student_id
+			JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
+			WHERE rt.code = 'dispensasi' AND r.deleted_at IS NULL AND (%s)
+		`, scopeFilter)
+
+		selectQuery = fmt.Sprintf(`
+			SELECT DISTINCT r.id, rt.label, r.reason, r.status, r.created_at, r.updated_at, r.start_time, r.end_time,
+			       COALESCE(tp.full_name,''), '-', COALESCE(tp.employee_code,'-'), COALESCE(u.email,'-')
+			FROM requests r
+			JOIN request_types rt ON rt.id = r.request_type_id
+			JOIN users u ON u.id = r.requester_user_id
+			LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
+			JOIN request_students rs ON rs.request_id = r.id
+			JOIN student_profiles sp ON sp.id = rs.student_id
+			JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
+			WHERE rt.code = 'dispensasi' AND r.deleted_at IS NULL AND (%s)
+			ORDER BY r.created_at DESC
+			LIMIT ? OFFSET ?
+		`, scopeFilter)
+	} else {
+		countQuery = `
+			SELECT COUNT(DISTINCT r.id)
+			FROM requests r
+			JOIN request_types rt ON rt.id = r.request_type_id
+			WHERE rt.code = 'dispensasi' AND r.deleted_at IS NULL
+		`
+
+		selectQuery = `
+			SELECT DISTINCT r.id, rt.label, r.reason, r.status, r.created_at, r.updated_at, r.start_time, r.end_time,
+			       COALESCE(tp.full_name,''), '-', COALESCE(tp.employee_code,'-'), COALESCE(u.email,'-')
+			FROM requests r
+			JOIN request_types rt ON rt.id = r.request_type_id
+			JOIN users u ON u.id = r.requester_user_id
+			LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
+			WHERE rt.code = 'dispensasi' AND r.deleted_at IS NULL
+			ORDER BY r.created_at DESC
+			LIMIT ? OFFSET ?
+		`
+	}
+
+	err := r.db.QueryRow(countQuery).Scan(&totalItems)
 	if err != nil {
 		return nil, err
 	}
 
-	rows, err := r.db.Query(`
-		SELECT r.id, rt.label, r.reason, r.status, r.created_at, r.updated_at, r.start_time, r.end_time,
-		       COALESCE(tp.full_name,''), '-', COALESCE(tp.employee_code,'-'), COALESCE(u.email,'-')
-		FROM requests r
-		JOIN request_types rt ON rt.id = r.request_type_id
-		JOIN users u ON u.id = r.requester_user_id
-		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
-		WHERE rt.code = 'dispensasi' AND r.deleted_at IS NULL
-		ORDER BY r.created_at DESC
-		LIMIT ? OFFSET ?
-	`, limit, offset)
+	rows, err := r.db.Query(selectQuery, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -557,23 +602,27 @@ func (r *letterRepository) GetTeacherActiveRoles(userID int) ([]domain.TeacherRo
 func (r *letterRepository) ListLettersForTeacherScoped(userID int, typeKey string, page, limit int) (*domain.PaginatedLetterResponse, error) {
 	offset := (page - 1) * limit
 
-	// Use v_teacher_scope to filter requests visible to this teacher
-	countQuery := `
+	scopeFilter, err := BuildRBACScopeFilter(r.db, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	countQuery := fmt.Sprintf(`
 		SELECT COUNT(DISTINCT r.id)
 		FROM requests r
 		JOIN request_types rt ON rt.id = r.request_type_id
 		JOIN users u ON u.id = r.requester_user_id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
-		JOIN v_teacher_scope vts ON vts.student_id = sp.id
-		JOIN teacher_profiles tp ON tp.id = vts.teacher_id
-		WHERE rt.code = ? AND r.deleted_at IS NULL AND tp.user_id = ?
-	`
+		LEFT JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
+		WHERE rt.code = ? AND r.deleted_at IS NULL AND (%s)
+	`, scopeFilter)
+
 	var totalItems int
-	if err := r.db.QueryRow(countQuery, typeKey, userID).Scan(&totalItems); err != nil {
+	if err := r.db.QueryRow(countQuery, typeKey).Scan(&totalItems); err != nil {
 		return nil, err
 	}
 
-	rows, err := r.db.Query(`
+	rows, err := r.db.Query(fmt.Sprintf(`
 		SELECT DISTINCT r.id, rt.label, r.reason, r.status, r.created_at, r.updated_at, r.start_time, r.end_time,
 		       COALESCE(sp.full_name,''), COALESCE(c.class_name,'-'), COALESCE(sp.student_code,'-'), COALESCE(u.email,'-')
 		FROM requests r
@@ -582,12 +631,10 @@ func (r *letterRepository) ListLettersForTeacherScoped(userID int, typeKey strin
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
 		LEFT JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
 		LEFT JOIN classes c ON c.id = sce.class_id
-		JOIN v_teacher_scope vts ON vts.student_id = sp.id
-		JOIN teacher_profiles tp ON tp.id = vts.teacher_id
-		WHERE rt.code = ? AND r.deleted_at IS NULL AND tp.user_id = ?
+		WHERE rt.code = ? AND r.deleted_at IS NULL AND (%s)
 		ORDER BY r.created_at DESC
 		LIMIT ? OFFSET ?
-	`, typeKey, userID, limit, offset)
+	`, scopeFilter), typeKey, limit, offset)
 	if err != nil {
 		return nil, err
 	}

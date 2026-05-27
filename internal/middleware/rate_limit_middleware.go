@@ -65,7 +65,7 @@ func (r *RedisRateLimiter) LoginRateLimiter() gin.HandlerFunc {
 		// Check if rate limit exceeded
 		if int(val) > r.maxAttempts {
 			remainingTime, _ := r.client.TTL(ctx, key).Result()
-			response.Error(c, http.StatusTooManyRequests, 
+			response.Error(c, http.StatusTooManyRequests,
 				fmt.Sprintf("Terlalu banyak percobaan login. Silakan coba lagi dalam %d Menit.", int(remainingTime.Seconds()/60)))
 			c.Abort()
 			return

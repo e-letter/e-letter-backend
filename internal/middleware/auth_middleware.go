@@ -29,6 +29,7 @@ func RequireAccessToken(jwtSecret string) gin.HandlerFunc {
 		c.Set("userId", claims.UserID)
 		c.Set("userEmail", claims.Email)
 		c.Set("userRole", claims.Role)
+		c.Set("subRoles", claims.SubRoles)
 		c.Next()
 	}
 }

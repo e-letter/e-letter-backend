@@ -20,8 +20,6 @@ func NewPermissionHandler(s service.PermissionService, isDev bool) *PermissionHa
 	return &PermissionHandler{service: s, isDev: isDev}
 }
 
-
-
 func (h *PermissionHandler) GetRequests(c *gin.Context) {
 	idSiswa := c.Query("id_siswa")
 	action := c.Query("action")
@@ -217,13 +215,21 @@ func (h *PermissionHandler) GetTeacherRoles(c *gin.Context) {
 func (h *PermissionHandler) RequestTeacherRole(c *gin.Context) {
 	userID := toIntFromContext(c, "userId")
 	var body struct {
-		RoleName string `json:"role_name" binding:"required"`
+		RoleName        string `json:"role_name" binding:"required"`
+		HomeroomClassID *int   `json:"homeroom_class_id"`
+		MajorID         *int   `json:"major_id"`
+		SubjectIDs      []int  `json:"subject_ids"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.service.RequestTeacherRole(userID, body.RoleName); err != nil {
+	meta := domain.TeacherRoleMetadata{
+		HomeroomClassID: body.HomeroomClassID,
+		MajorID:         body.MajorID,
+		SubjectIDs:      body.SubjectIDs,
+	}
+	if err := h.service.RequestTeacherRole(userID, body.RoleName, meta); err != nil {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -269,4 +275,3 @@ func (h *PermissionHandler) DeleteDelegation(c *gin.Context) {
 	}
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Delegasi berhasil dihapus"})
 }
-
