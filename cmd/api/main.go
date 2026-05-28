@@ -40,7 +40,7 @@ func main() {
 
 	letterRepo := repository.NewLetterRepository(db, cfg.App.SchoolCode)
 	letterService := service.NewLetterService(letterRepo)
-	letterHandler := handler.NewLetterHandler(letterService)
+	letterHandler := handler.NewLetterHandler(letterService, db)
 
 	attachmentRepo := repository.NewAttachmentRepository(db)
 	attachmentService := service.NewAttachmentService(attachmentRepo)

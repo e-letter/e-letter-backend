@@ -86,7 +86,8 @@ func SetupRouter(
 			protected.GET("/letters/teacher", letterHandler.TeacherLetters)
 			protected.GET("/letters/dispensasi", letterHandler.GeneralDispensasi)
 			protected.GET("/letters/general/dispensasi", letterHandler.GeneralDispensasi)
-			protected.GET("/letters/kepsek/pending", letterHandler.TeacherPending)
+			protected.GET("/letters/kepsek/pending", letterHandler.KepsekPending)
+			protected.GET("/letters/kepsek/stats", letterHandler.KepsekStats)
 
 			// Attachments
 			protected.GET("/attachments/:id", attachmentHandler.GetByID)
