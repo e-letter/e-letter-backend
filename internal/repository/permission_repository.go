@@ -18,10 +18,11 @@ type PermissionRepository interface {
 type permissionRepository struct {
 	db         *sql.DB
 	schoolCode string
+	publisher  NotificationPublisher
 }
 
-func NewPermissionRepository(db *sql.DB, schoolCode string) PermissionRepository {
-	return &permissionRepository{db: db, schoolCode: schoolCode}
+func NewPermissionRepository(db *sql.DB, schoolCode string, publisher NotificationPublisher) PermissionRepository {
+	return &permissionRepository{db: db, schoolCode: schoolCode, publisher: publisher}
 }
 
 func (r *permissionRepository) ListAll() ([]domain.PermissionRequest, error) {
@@ -147,8 +148,17 @@ func (r *permissionRepository) Create(req domain.CreatePermissionRequest) (int, 
 	}
 	id := int(lid)
 
+	requestID := int64(id)
+	body := fmt.Sprintf("Permohonan Anda dengan nomor %s telah dikirim dan menunggu persetujuan.", requestNumber)
+	if err := createNotificationTx(tx, int64(req.IDSiswa), "request_submitted", "Permohonan terkirim", &body, &requestID, nil); err != nil {
+		return 0, err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, err
+	}
+	if r.publisher != nil {
+		r.publisher.Publish(req.IDSiswa, "notifications:refresh")
 	}
 	return id, nil
 }
@@ -159,6 +169,11 @@ func (r *permissionRepository) Update(req domain.UpdatePermissionRequest) error 
 		return err
 	}
 	defer tx.Rollback()
+
+	var requestOwnerID int
+	if err := tx.QueryRow(`SELECT requester_user_id FROM requests WHERE id = ?`, req.RequestID).Scan(&requestOwnerID); err != nil {
+		return err
+	}
 
 	updates := []string{}
 	args := []any{}
@@ -187,7 +202,13 @@ func (r *permissionRepository) Update(req domain.UpdatePermissionRequest) error 
 	if _, err := tx.Exec(query, args...); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if r.publisher != nil {
+		r.publisher.Publish(int(requestOwnerID), "notifications:refresh")
+	}
+	return nil
 }
 
 func (r *permissionRepository) Delete(requestID int) error {
@@ -196,10 +217,22 @@ func (r *permissionRepository) Delete(requestID int) error {
 		return err
 	}
 	defer tx.Rollback()
+
+	var userID int
+	if err := tx.QueryRow(`SELECT requester_user_id FROM requests WHERE id = ?`, requestID).Scan(&userID); err != nil {
+		return err
+	}
+
 	if _, err := tx.Exec(`UPDATE requests SET deleted_at = NOW() WHERE id = ?`, requestID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if r.publisher != nil {
+		r.publisher.Publish(userID, "notifications:refresh")
+	}
+	return nil
 }
 
 func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID int) error {
@@ -282,6 +315,29 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 	}
 
 	if _, err := tx.Exec(`UPDATE requests SET status = ?, current_step = ?, updated_at = NOW() WHERE id = ?`, targetStatus, currentStep, req.RequestID); err != nil {
+		return err
+	}
+
+	var requestOwnerID int64
+	var requestNumber string
+	if err := tx.QueryRow(`SELECT requester_user_id, request_number FROM requests WHERE id = ?`, req.RequestID).Scan(&requestOwnerID, &requestNumber); err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("Permohonan Anda (%s) telah diproses. Status saat ini: %s.", requestNumber, targetStatus)
+	var notifType, notifTitle string
+	switch targetStatus {
+	case "approved":
+		notifType = "request_approved"
+		notifTitle = "Permohonan disetujui"
+	case "rejected":
+		notifType = "request_rejected"
+		notifTitle = "Permohonan ditolak"
+	default:
+		notifType = "request_updated"
+		notifTitle = "Permohonan diperbarui"
+	}
+	if err := createNotificationTx(tx, requestOwnerID, notifType, notifTitle, &body, ptrInt64(int64(req.RequestID)), nil); err != nil {
 		return err
 	}
 
@@ -396,10 +452,32 @@ func (r *permissionRepository) CancelRequest(requestID, userID int, reason strin
 		return errors.New("Hanya permintaan dengan status pending yang dapat dibatalkan")
 	}
 
-	_, err = r.db.Exec(`UPDATE requests SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = ?, cancel_reason = ? WHERE id = ?`,
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var requestNumber string
+	if err := tx.QueryRow(`SELECT request_number FROM requests WHERE id = ?`, requestID).Scan(&requestNumber); err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(`UPDATE requests SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = ?, cancel_reason = ? WHERE id = ?`,
 		userID, reason, requestID)
-	return err
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("Permohonan Anda (%s) telah dibatalkan.", requestNumber)
+	if err := createNotificationTx(tx, int64(userID), "request_cancelled", "Permohonan dibatalkan", &body, ptrInt64(int64(requestID)), nil); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
+
+func ptrInt64(v int64) *int64 { return &v }
 
 func (r *permissionRepository) GetRequestDetail(requestID int) (any, error) {
 	// Get request info

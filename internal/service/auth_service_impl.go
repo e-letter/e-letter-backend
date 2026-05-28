@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,18 +14,20 @@ import (
 )
 
 type authService struct {
-	repo          repository.AuthRepository
-	jwtSecret     string
-	accessExpiry  time.Duration
-	refreshExpiry time.Duration
+	repo             repository.AuthRepository
+	notificationRepo repository.NotificationRepository
+	jwtSecret        string
+	accessExpiry     time.Duration
+	refreshExpiry    time.Duration
 }
 
-func NewAuthService(r repository.AuthRepository, jwtSecret string, accessExpiry, refreshExpiry time.Duration) AuthService {
+func NewAuthService(r repository.AuthRepository, notificationRepo repository.NotificationRepository, jwtSecret string, accessExpiry, refreshExpiry time.Duration) AuthService {
 	return &authService{
-		repo:          r,
-		jwtSecret:     jwtSecret,
-		accessExpiry:  accessExpiry,
-		refreshExpiry: refreshExpiry,
+		repo:             r,
+		notificationRepo: notificationRepo,
+		jwtSecret:        jwtSecret,
+		accessExpiry:     accessExpiry,
+		refreshExpiry:    refreshExpiry,
 	}
 }
 
@@ -128,6 +131,9 @@ func (s *authService) Login(req domain.LoginRequest, ip, userAgent string) (*dom
 	if err := s.repo.StoreRefreshToken(user.ID, refreshHash, time.Now().Add(s.refreshExpiry)); err != nil {
 		return nil, "", "", err
 	}
+
+	loginBody := fmt.Sprintf("Anda berhasil login pada %s.", time.Now().Format("02 Jan 2006 15:04"))
+	_ = s.notificationRepo.Create(context.Background(), int64(user.ID), "login", "Login berhasil", &loginBody, nil, nil)
 
 	return user, accessToken, refreshToken, nil
 }

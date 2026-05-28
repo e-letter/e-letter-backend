@@ -10,57 +10,69 @@ import (
 func (r *authRepository) GetUserByLoginIdentifiers(id string) (*domain.User, error) {
 	query := `
 		SELECT u.id, u.username, u.email, u.role, u.status, u.password_hash,
-		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN tp.full_name
+		       CASE WHEN u.role = 'teacher' THEN tp.full_name
+		            WHEN u.role = 'kepala_sekolah' THEN pp.full_name
 		            WHEN u.role = 'student' THEN sp.full_name
 		       END as full_name,
 		       CASE WHEN u.role = 'student' THEN sp.student_code ELSE NULL END as student_code,
-		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN tp.employee_code ELSE NULL END as employee_code,
-		       COALESCE(tp.gender, sp.gender, NULL) as gender,
-		       COALESCE(tp.phone, sp.phone, NULL) as phone_number,
+		       CASE WHEN u.role = 'teacher' THEN tp.employee_code
+		            WHEN u.role = 'kepala_sekolah' THEN pp.employee_code
+		            ELSE NULL
+		       END as employee_code,
+		       COALESCE(tp.gender, sp.gender, pp.gender, NULL) as gender,
+		       COALESCE(tp.phone, sp.phone, pp.phone, NULL) as phone_number,
 		       CASE WHEN u.role = 'student'
 		            THEN (SELECT class_id FROM student_class_enrollments sce WHERE sce.student_id = sp.id AND sce.is_active = 1 LIMIT 1)
 		            WHEN u.role = 'teacher'
 		            THEN (SELECT class_id FROM class_homeroom_assignments cha WHERE cha.teacher_id = tp.id AND cha.is_active = 1 LIMIT 1)
 		       END as class_id,
 		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN true ELSE false END as can_request_dispensasi,
-		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN COALESCE(tp.active, 0)
+		       CASE WHEN u.role = 'teacher' THEN COALESCE(tp.active, 0)
+		            WHEN u.role = 'kepala_sekolah' THEN COALESCE(pp.active, 0)
 		            WHEN u.role = 'student' THEN COALESCE(sp.active, 0)
 		            ELSE false
 		       END as profile_completed
 		FROM users u
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
-		WHERE (u.username = ? OR u.email = ? OR sp.student_code = ? OR tp.employee_code = ?)
+		LEFT JOIN principal_profiles pp ON pp.user_id = u.id
+		WHERE (u.username = ? OR u.email = ? OR sp.student_code = ? OR tp.employee_code = ? OR pp.employee_code = ?)
 		  AND u.status = 'active' AND u.deleted_at IS NULL
 		LIMIT 1
 	`
-	row := r.db.QueryRow(query, id, id, id, id)
+	row := r.db.QueryRow(query, id, id, id, id, id)
 	return scanUser(row)
 }
 
 func (r *authRepository) GetUserByEmail(email string) (*domain.User, error) {
 	query := `
 		SELECT u.id, u.username, u.email, u.role, u.status, u.password_hash,
-		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN tp.full_name
+		       CASE WHEN u.role = 'teacher' THEN tp.full_name
+		            WHEN u.role = 'kepala_sekolah' THEN pp.full_name
 		            WHEN u.role = 'student' THEN sp.full_name
 		       END as full_name,
 		       CASE WHEN u.role = 'student' THEN sp.student_code ELSE NULL END as student_code,
-		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN tp.employee_code ELSE NULL END as employee_code,
-		       COALESCE(tp.gender, sp.gender, NULL) as gender,
-		       COALESCE(tp.phone, sp.phone, NULL) as phone_number,
+		       CASE WHEN u.role = 'teacher' THEN tp.employee_code
+		            WHEN u.role = 'kepala_sekolah' THEN pp.employee_code
+		            ELSE NULL
+		       END as employee_code,
+		       COALESCE(tp.gender, sp.gender, pp.gender, NULL) as gender,
+		       COALESCE(tp.phone, sp.phone, pp.phone, NULL) as phone_number,
 		       CASE WHEN u.role = 'student'
 		            THEN (SELECT class_id FROM student_class_enrollments sce WHERE sce.student_id = sp.id AND sce.is_active = 1 LIMIT 1)
 		            WHEN u.role = 'teacher'
 		            THEN (SELECT class_id FROM class_homeroom_assignments cha WHERE cha.teacher_id = tp.id AND cha.is_active = 1 LIMIT 1)
 		       END as class_id,
 		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN true ELSE false END as can_request_dispensasi,
-		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN COALESCE(tp.active, 0)
+		       CASE WHEN u.role = 'teacher' THEN COALESCE(tp.active, 0)
+		            WHEN u.role = 'kepala_sekolah' THEN COALESCE(pp.active, 0)
 		            WHEN u.role = 'student' THEN COALESCE(sp.active, 0)
 		            ELSE false
 		       END as profile_completed
 		FROM users u
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
+		LEFT JOIN principal_profiles pp ON pp.user_id = u.id
 		WHERE u.email = ? AND u.status = 'active' AND u.deleted_at IS NULL
 		LIMIT 1
 	`
@@ -118,6 +130,12 @@ func (r *authRepository) UpdateUserProfile(userID int, fullName string, profileC
 			 ON DUPLICATE KEY UPDATE full_name = VALUES(full_name), active = VALUES(active)`,
 			userID, fullName, profileCompleted,
 		)
+	} else if role == "kepala_sekolah" {
+		_, err = r.db.Exec(
+			`INSERT INTO principal_profiles (user_id, full_name, active) VALUES (?, ?, ?)
+			 ON DUPLICATE KEY UPDATE full_name = VALUES(full_name), active = VALUES(active)`,
+			userID, fullName, profileCompleted,
+		)
 	} else {
 		_, err = r.db.Exec(
 			`INSERT INTO teacher_profiles (user_id, full_name, active) VALUES (?, ?, ?)
@@ -131,26 +149,32 @@ func (r *authRepository) UpdateUserProfile(userID int, fullName string, profileC
 func (r *authRepository) GetUserByID(userID int) (*domain.User, error) {
 	query := `
 		SELECT u.id, u.username, u.email, u.role, u.status, u.password_hash,
-		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN tp.full_name
+		       CASE WHEN u.role = 'teacher' THEN tp.full_name
+		            WHEN u.role = 'kepala_sekolah' THEN pp.full_name
 		            WHEN u.role = 'student' THEN sp.full_name
 		       END as full_name,
 		       CASE WHEN u.role = 'student' THEN sp.student_code ELSE NULL END as student_code,
-		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN tp.employee_code ELSE NULL END as employee_code,
-		       COALESCE(tp.gender, sp.gender, NULL) as gender,
-		       COALESCE(tp.phone, sp.phone, NULL) as phone_number,
+		       CASE WHEN u.role = 'teacher' THEN tp.employee_code
+		            WHEN u.role = 'kepala_sekolah' THEN pp.employee_code
+		            ELSE NULL
+		       END as employee_code,
+		       COALESCE(tp.gender, sp.gender, pp.gender, NULL) as gender,
+		       COALESCE(tp.phone, sp.phone, pp.phone, NULL) as phone_number,
 		       CASE WHEN u.role = 'student'
 		            THEN (SELECT class_id FROM student_class_enrollments sce WHERE sce.student_id = sp.id AND sce.is_active = 1 LIMIT 1)
 		            WHEN u.role = 'teacher'
 		            THEN (SELECT class_id FROM class_homeroom_assignments cha WHERE cha.teacher_id = tp.id AND cha.is_active = 1 LIMIT 1)
 		       END as class_id,
 		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN true ELSE false END as can_request_dispensasi,
-		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN COALESCE(tp.active, 0)
+		       CASE WHEN u.role = 'teacher' THEN COALESCE(tp.active, 0)
+		            WHEN u.role = 'kepala_sekolah' THEN COALESCE(pp.active, 0)
 		            WHEN u.role = 'student' THEN COALESCE(sp.active, 0)
 		            ELSE false
 		       END as profile_completed
 		FROM users u
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
+		LEFT JOIN principal_profiles pp ON pp.user_id = u.id
 		WHERE u.id = ? AND u.deleted_at IS NULL
 		LIMIT 1
 	`

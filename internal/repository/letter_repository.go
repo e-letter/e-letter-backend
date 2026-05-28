@@ -16,10 +16,11 @@ type LetterRepository interface {
 type letterRepository struct {
 	db         *sql.DB
 	schoolCode string
+	publisher  NotificationPublisher
 }
 
-func NewLetterRepository(db *sql.DB, schoolCode string) LetterRepository {
-	return &letterRepository{db: db, schoolCode: schoolCode}
+func NewLetterRepository(db *sql.DB, schoolCode string, publisher NotificationPublisher) LetterRepository {
+	return &letterRepository{db: db, schoolCode: schoolCode, publisher: publisher}
 }
 
 func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateRequest) (int, error) {
@@ -57,7 +58,7 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 	}
 
 	// --- Approval Orchestration ---
-	firstPendingStep, err := r.createApprovalSteps(tx, int64(requestID), req.TypeID, userID, int64(academicYearID))
+	firstPendingStep, firstPendingApproverUserID, err := r.createApprovalSteps(tx, int64(requestID), req.TypeID, userID, int64(academicYearID))
 	if err != nil {
 		return 0, fmt.Errorf("approval orchestration: %w", err)
 	}
@@ -67,21 +68,34 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 		}
 	}
 
+	body := fmt.Sprintf("Permohonan Anda dengan nomor %s telah dikirim dan menunggu persetujuan.", requestNumber)
+	requestID64 := int64(requestID)
+	if err := createNotificationTx(tx, int64(userID), "request_submitted", "Permohonan terkirim", &body, &requestID64, nil); err != nil {
+		return 0, err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	if r.publisher != nil {
+		r.publisher.Publish(userID, "notifications:refresh")
+		if firstPendingApproverUserID != nil {
+			r.publisher.Publish(int(*firstPendingApproverUserID), "notifications:refresh")
+		}
+	}
+
 	return requestID, nil
 }
 
 // createApprovalSteps reads flow templates, resolves approvers, inserts approval rows,
 // and sends a notification to the first pending approver. Returns the first pending step number.
-func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requestTypeID int, userID int, academicYearID int64) (int, error) {
+func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requestTypeID int, userID int, academicYearID int64) (int, *int64, error) {
 	// 1. Read flow templates
 	rows, err := r.db.Query(
 		`SELECT step_no, approver_role, is_required, skip_if_no_schedule
 		 FROM approval_flow_templates WHERE request_type_id = ? ORDER BY step_no ASC`, requestTypeID)
 	if err != nil {
-		return 1, err
+		return 1, nil, err
 	}
 	defer rows.Close()
 
@@ -95,15 +109,15 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 	for rows.Next() {
 		var t tmpl
 		if err := rows.Scan(&t.StepNo, &t.ApproverRole, &t.IsRequired, &t.SkipIfNoSchedule); err != nil {
-			return 1, err
+			return 1, nil, err
 		}
 		templates = append(templates, t)
 	}
 	if err := rows.Err(); err != nil {
-		return 1, err
+		return 1, nil, err
 	}
 	if len(templates) == 0 {
-		return 1, nil
+		return 1, nil, nil
 	}
 
 	// 2. Gather student context
@@ -229,7 +243,7 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 			s.Status, s.SignatureURL, s.ScheduleID, actedAt, s.Notes,
 		)
 		if err != nil {
-			return 1, fmt.Errorf("insert approval step %d (%s): %w", s.StepNo, s.ApproverRole, err)
+			return 1, nil, fmt.Errorf("insert approval step %d (%s): %w", s.StepNo, s.ApproverRole, err)
 		}
 	}
 
@@ -249,10 +263,11 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 					}
 				}
 				if resolved {
-					tx.Exec(
-						`INSERT INTO notifications (user_id, request_id, type, title, body)
-						 VALUES (?, ?, 'new_request', 'Permohonan Izin Baru', 'Ada permohonan izin yang memerlukan persetujuan Anda.')`,
-						approverUserID, requestID)
+					body := "Ada permohonan izin yang memerlukan persetujuan Anda."
+					if err := createNotificationTx(tx, approverUserID, "new_request", "Permohonan Izin Baru", &body, &requestID, nil); err != nil {
+						return 1, nil, err
+					}
+					return firstPendingStep, &approverUserID, nil
 				}
 				break
 			}
@@ -262,7 +277,7 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 	if firstPendingStep == -1 {
 		firstPendingStep = 1
 	}
-	return firstPendingStep, nil
+	return firstPendingStep, nil, nil
 }
 
 // findGuruMapelSchedule finds a teacher with a schedule on the given date for the class.

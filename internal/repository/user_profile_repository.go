@@ -39,14 +39,18 @@ func (r *userProfileRepository) GetByUserID(userID int) (*domain.User, error) {
 
 	query := `
     SELECT u.id, u.username, u.email, u.role, u.status, u.password_hash,
-           CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN tp.full_name
+           CASE WHEN u.role = 'teacher' THEN tp.full_name
+                WHEN u.role = 'kepala_sekolah' THEN pp.full_name
                 WHEN u.role = 'student' THEN sp.full_name
                 WHEN u.role = 'admin' THEN u.username
            END as full_name,
            CASE WHEN u.role = 'student' THEN sp.student_code ELSE NULL END as student_code,
-           CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN tp.employee_code ELSE NULL END as employee_code,
-           COALESCE(tp.gender, sp.gender, NULL) as gender,
-           COALESCE(tp.phone, sp.phone, NULL) as phone_number,
+           CASE WHEN u.role = 'teacher' THEN tp.employee_code
+                WHEN u.role = 'kepala_sekolah' THEN pp.employee_code
+                ELSE NULL
+           END as employee_code,
+           COALESCE(tp.gender, sp.gender, pp.gender, NULL) as gender,
+           COALESCE(tp.phone, sp.phone, pp.phone, NULL) as phone_number,
 		       CASE WHEN u.role = 'student'
 		            THEN (SELECT sce.class_id
 		                  FROM student_class_enrollments sce
@@ -57,13 +61,15 @@ func (r *userProfileRepository) GetByUserID(userID int) (*domain.User, error) {
 		       END as class_id,
            CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN true ELSE false END as can_request_dispensasi,
            CASE WHEN u.role = 'admin' THEN true
-                WHEN u.role IN ('teacher','kepala_sekolah') THEN COALESCE(tp.active, 0)
+                WHEN u.role = 'teacher' THEN COALESCE(tp.active, 0)
+                WHEN u.role = 'kepala_sekolah' THEN COALESCE(pp.active, 0)
                 WHEN u.role = 'student' THEN COALESCE(sp.active, 0)
                 ELSE false
            END as profile_completed
     FROM users u
     LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
     LEFT JOIN student_profiles sp ON sp.user_id = u.id
+    LEFT JOIN principal_profiles pp ON pp.user_id = u.id
     WHERE u.id = ? AND u.deleted_at IS NULL
     LIMIT 1
   `
@@ -169,6 +175,17 @@ func (r *userProfileRepository) Update(userID int, payload domain.UserProfileUpd
 		}
 	}
 
+	if payload.SchoolName != nil {
+		_, err = tx.Exec(
+			`INSERT INTO school_config (config_key, config_value) VALUES ('school_name', ?)
+			 ON DUPLICATE KEY UPDATE config_value = VALUES(config_value)`,
+			*payload.SchoolName,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	updates := []string{}
 	args := []any{}
 
@@ -184,19 +201,15 @@ func (r *userProfileRepository) Update(userID int, payload domain.UserProfileUpd
 		updates = append(updates, "gender = ?")
 		args = append(args, *payload.Gender)
 	}
-	if payload.NISN != nil {
+	if payload.NISN != nil && userRole == "student" {
 		updates = append(updates, "student_code = ?")
 		args = append(args, *payload.NISN)
 	}
-	if payload.NIP != nil {
+	if payload.NIP != nil && (userRole == "teacher" || userRole == "kepala_sekolah") {
 		updates = append(updates, "employee_code = ?")
 		args = append(args, *payload.NIP)
 	}
-	if payload.SchoolName != nil {
-		updates = append(updates, "school_name = ?")
-		args = append(args, *payload.SchoolName)
-	}
-	if payload.SignatureUrl != nil {
+	if payload.SignatureUrl != nil && (userRole == "teacher" || userRole == "kepala_sekolah") {
 		updates = append(updates, "signature_url = ?")
 		args = append(args, *payload.SignatureUrl)
 	}
@@ -209,6 +222,8 @@ func (r *userProfileRepository) Update(userID int, payload domain.UserProfileUpd
 		var tableName string
 		if userRole == "student" {
 			tableName = "student_profiles"
+		} else if userRole == "kepala_sekolah" {
+			tableName = "principal_profiles"
 		} else {
 			tableName = "teacher_profiles"
 		}
@@ -227,7 +242,7 @@ func (r *userProfileRepository) Update(userID int, payload domain.UserProfileUpd
 			}
 
 			if payload.FullName == nil || strings.TrimSpace(*payload.FullName) == "" {
-				return nil, fmt.Errorf("nama lengkap diperlukan untuk membuat profil siswa")
+				return nil, fmt.Errorf("nama lengkap diperlukan untuk membuat profil")
 			}
 
 			columns := []string{"user_id", "full_name"}
@@ -241,19 +256,15 @@ func (r *userProfileRepository) Update(userID int, payload domain.UserProfileUpd
 				columns = append(columns, "gender")
 				values = append(values, *payload.Gender)
 			}
-			if payload.NISN != nil {
+			if payload.NISN != nil && userRole == "student" {
 				columns = append(columns, "student_code")
 				values = append(values, *payload.NISN)
 			}
-			if payload.NIP != nil {
+			if payload.NIP != nil && (userRole == "teacher" || userRole == "kepala_sekolah") {
 				columns = append(columns, "employee_code")
 				values = append(values, *payload.NIP)
 			}
-			if payload.SchoolName != nil {
-				columns = append(columns, "school_name")
-				values = append(values, *payload.SchoolName)
-			}
-			if payload.SignatureUrl != nil {
+			if payload.SignatureUrl != nil && (userRole == "teacher" || userRole == "kepala_sekolah") {
 				columns = append(columns, "signature_url")
 				values = append(values, *payload.SignatureUrl)
 			}

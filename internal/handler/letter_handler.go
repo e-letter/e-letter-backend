@@ -68,7 +68,7 @@ func (h *LetterHandler) KepsekPending(c *gin.Context) {
 		// Not yet a principal profile — return empty, not an error.
 		response.Raw(c, http.StatusOK, gin.H{
 			"success": true,
-			"data": gin.H{"data": []any{}, "currentPage": 1, "totalPages": 0, "totalItems": 0},
+			"data":    gin.H{"data": []any{}, "currentPage": 1, "totalPages": 0, "totalItems": 0},
 		})
 		return
 	}
@@ -143,12 +143,12 @@ func (h *LetterHandler) KepsekPending(c *gin.Context) {
 	items := make([]PendingItem, 0)
 	for rows.Next() {
 		var (
-			id                               int
-			typeLabel, reason, status       string
-			requestDate, submittedAt         time.Time
-			startTime, endTime               sql.NullTime
-			requesterName, className        string
-			code, email                     string
+			id                        int
+			typeLabel, reason, status string
+			requestDate, submittedAt  time.Time
+			startTime, endTime        sql.NullTime
+			requesterName, className  string
+			code, email               string
 		)
 		if err := rows.Scan(
 			&id, &typeLabel, &reason, &status,

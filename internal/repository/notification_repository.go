@@ -10,6 +10,7 @@ import (
 type NotificationRepository interface {
 	GetByUser(ctx context.Context, userID int64) ([]domain.Notification, error)
 	MarkAsRead(ctx context.Context, notificationID, userID int64) error
+	Create(ctx context.Context, userID int64, notifType, title string, body *string, requestID, approvalID *int64) error
 }
 
 type notificationRepository struct {
@@ -44,6 +45,38 @@ func (r *notificationRepository) GetByUser(ctx context.Context, userID int64) ([
 	}
 
 	return notifications, rows.Err()
+}
+
+func (r *notificationRepository) Create(ctx context.Context, userID int64, notifType, title string, body *string, requestID, approvalID *int64) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO notifications (user_id, request_id, approval_id, type, title, body)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		userID, nullableInt64(requestID), nullableInt64(approvalID), notifType, title, nullableString(body),
+	)
+	return err
+}
+
+func createNotificationTx(tx *sql.Tx, userID int64, notifType, title string, body *string, requestID, approvalID *int64) error {
+	_, err := tx.Exec(
+		`INSERT INTO notifications (user_id, request_id, approval_id, type, title, body)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		userID, nullableInt64(requestID), nullableInt64(approvalID), notifType, title, nullableString(body),
+	)
+	return err
+}
+
+func nullableInt64(value *int64) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func nullableString(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func (r *notificationRepository) MarkAsRead(ctx context.Context, notificationID, userID int64) error {

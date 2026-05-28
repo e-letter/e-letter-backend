@@ -26,19 +26,23 @@ func main() {
 	rateLimiter := middleware.NewRedisRateLimiter(cfg)
 	defer rateLimiter.Close()
 
+	eventBus := handler.NewEventBus()
+	sseHandler := handler.NewSSEHandler(eventBus)
+
 	authRepo := repository.NewAuthRepository(db)
-	authService := service.NewAuthService(authRepo, cfg.JWT.Secret, cfg.JWT.AccessExpiresIn, cfg.JWT.RefreshExpiresIn)
+	notificationRepo := repository.NewNotificationRepository(db)
+	authService := service.NewAuthService(authRepo, notificationRepo, cfg.JWT.Secret, cfg.JWT.AccessExpiresIn, cfg.JWT.RefreshExpiresIn)
 	authHandler := handler.NewAuthHandler(authService, cfg)
 
 	userProfileRepo := repository.NewUserProfileRepository(db)
 	userProfileService := service.NewUserProfileService(userProfileRepo)
 	userProfileHandler := handler.NewUserProfileHandler(userProfileService)
 
-	permissionRepo := repository.NewPermissionRepository(db, cfg.App.SchoolCode)
+	permissionRepo := repository.NewPermissionRepository(db, cfg.App.SchoolCode, eventBus)
 	permissionService := service.NewPermissionService(permissionRepo)
 	permissionHandler := handler.NewPermissionHandler(permissionService, cfg.App.Env != "production")
 
-	letterRepo := repository.NewLetterRepository(db, cfg.App.SchoolCode)
+	letterRepo := repository.NewLetterRepository(db, cfg.App.SchoolCode, eventBus)
 	letterService := service.NewLetterService(letterRepo)
 	letterHandler := handler.NewLetterHandler(letterService, db)
 
@@ -50,14 +54,10 @@ func main() {
 	masterDataService := service.NewMasterDataService(masterDataRepo)
 	masterDataHandler := handler.NewMasterDataHandler(masterDataService)
 
-	notificationRepo := repository.NewNotificationRepository(db)
 	notificationService := service.NewNotificationService(notificationRepo)
 	notificationHandler := handler.NewNotificationHandler(notificationService)
 
 	adminHandler := handler.NewAdminHandler(db)
-
-	eventBus := handler.NewEventBus()
-	sseHandler := handler.NewSSEHandler(eventBus)
 
 	router := routes.SetupRouter(
 		cfg,
