@@ -10,9 +10,15 @@ type Config struct {
 	Redis     RedisConfig
 	RateLimit RateLimitConfig
 	Admin     AdminConfig
+	Kepsek    KepsekConfig
 }
 
 type AdminConfig struct {
+	Username string
+	Password string
+}
+
+type KepsekConfig struct {
 	Username string
 	Password string
 }

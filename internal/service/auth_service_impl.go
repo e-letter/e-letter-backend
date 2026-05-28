@@ -132,32 +132,55 @@ func (s *authService) Login(req domain.LoginRequest, ip, userAgent string) (*dom
 	return user, accessToken, refreshToken, nil
 }
 
-// IssueAdminTokens looks up the admin's real DB user_id by username, then generates
+// IssueAdminTokens looks up the admin/kepsek's real DB user_id by username, then generates
 // access/refresh tokens using that ID and persists the refresh token hash so that the
 // standard /auth/refresh endpoint can rotate it correctly.
 func (s *authService) IssueAdminTokens(adminUsername string) (string, string, int, error) {
-	const adminRole = "admin"
-	const adminMainRole = "Admin"
-
 	// Resolve the real user_id from the database to satisfy the FK on jwt_tokens.
 	lookupUsername := adminUsername
 	if lookupUsername == "admin" {
 		lookupUsername = "A001"
-	}
-	adminUser, err := s.repo.GetUserByLoginIdentifiers(lookupUsername)
-	if err != nil || adminUser == nil {
-		return "", "", 0, fmt.Errorf("admin user tidak ditemukan di database: %w", err)
+	} else if lookupUsername == "kepsek" {
+		lookupUsername = "KS001"
 	}
 
-	adminEmail := "admin@system"
-	if adminUser.Email != nil && *adminUser.Email != "" {
-		adminEmail = *adminUser.Email
-	} else if adminUser.Username != nil {
-		adminEmail = *adminUser.Username
+	user, err := s.repo.GetUserByLoginIdentifiers(lookupUsername)
+	if err != nil || user == nil {
+		return "", "", 0, fmt.Errorf("user tidak ditemukan di database: %w", err)
+	}
+
+	// Determine role and main role based on username
+	var role string
+	var mainRole string
+	if lookupUsername == "A001" {
+		role = "admin"
+		mainRole = "Admin"
+	} else if lookupUsername == "KS001" {
+		role = "kepala_sekolah"
+		mainRole = "Kepsek"
+	} else {
+		// Fallback - should not happen with current usage
+		role = "admin"
+		mainRole = "Admin"
+	}
+
+	// Determine email
+	email := "admin@system"
+	if lookupUsername == "A001" {
+		email = "admin@system"
+	} else if lookupUsername == "KS001" {
+		email = "kepsek@system"
+	}
+
+	// Override with actual email from database if available
+	if user.Email != nil && *user.Email != "" {
+		email = *user.Email
+	} else if user.Username != nil {
+		email = *user.Username
 	}
 
 	accessToken, err := utils.GenerateTokenFull(
-		s.jwtSecret, adminUser.ID, adminEmail, adminRole, adminMainRole,
+		s.jwtSecret, user.ID, email, role, mainRole,
 		[]string{}, true, "access", s.accessExpiry,
 	)
 	if err != nil {
@@ -165,7 +188,7 @@ func (s *authService) IssueAdminTokens(adminUsername string) (string, string, in
 	}
 
 	refreshToken, err := utils.GenerateTokenFull(
-		s.jwtSecret, adminUser.ID, adminEmail, adminRole, adminMainRole,
+		s.jwtSecret, user.ID, email, role, mainRole,
 		[]string{}, true, "refresh", s.refreshExpiry,
 	)
 	if err != nil {
@@ -173,11 +196,11 @@ func (s *authService) IssueAdminTokens(adminUsername string) (string, string, in
 	}
 
 	refreshHash := utils.HashToken(refreshToken)
-	if err := s.repo.StoreRefreshToken(adminUser.ID, refreshHash, time.Now().Add(s.refreshExpiry)); err != nil {
+	if err := s.repo.StoreRefreshToken(user.ID, refreshHash, time.Now().Add(s.refreshExpiry)); err != nil {
 		return "", "", 0, err
 	}
 
-	return accessToken, refreshToken, adminUser.ID, nil
+	return accessToken, refreshToken, user.ID, nil
 }
 
 func (s *authService) Refresh(refreshToken string) (string, string, error) {

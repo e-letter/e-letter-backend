@@ -69,6 +69,10 @@ func LoadConfig() *Config {
 			Username: mustGetEnv("ADMIN_USERNAME"),
 			Password: mustGetEnv("ADMIN_PASSWORD"),
 		},
+		Kepsek: KepsekConfig{
+			Username: mustGetEnv("KEPSEK_USERNAME"),
+			Password: mustGetEnv("KEPSEK_PASSWORD"),
+		},
 	}
 
 	return cfg

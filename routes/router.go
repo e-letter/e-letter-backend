@@ -41,6 +41,7 @@ func SetupRouter(
 		api.POST("/register", authHandler.Register)
 		api.POST("/auth/login", rateLimiter.LoginRateLimiter(), authHandler.Login)
 		api.POST("/auth/admin-login", rateLimiter.LoginRateLimiter(), authHandler.AdminLogin)
+		api.POST("/auth/kepsek-login", rateLimiter.LoginRateLimiter(), authHandler.KepsekLogin)
 		api.POST("/auth/logout", authHandler.Logout)
 		api.POST("/auth/refresh", authHandler.Refresh)
 		api.POST("/auth/forgot-password", authHandler.ForgotPassword)

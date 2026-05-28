@@ -40,4 +40,3 @@ func (s *userProfileService) CompleteTeacherOnboarding(payload domain.CompleteTe
 	}
 	return s.repo.CompleteTeacherOnboarding(payload)
 }
-

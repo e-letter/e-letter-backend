@@ -109,6 +109,37 @@ func (h *AuthHandler) AdminLogin(c *gin.Context) {
 	})
 }
 
+func (h *AuthHandler) KepsekLogin(c *gin.Context) {
+	var req struct {
+		Username string `json:"username" binding:"required"`
+		Password string `json:"password" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if req.Username != h.cfg.Kepsek.Username || req.Password != h.cfg.Kepsek.Password {
+		response.Error(c, http.StatusUnauthorized, "Kredensial kepsek tidak valid")
+		return
+	}
+
+	accessToken, refreshToken, kepsekUserID, err := h.service.IssueAdminTokens(h.cfg.Kepsek.Username)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "Gagal membuat token")
+		return
+	}
+
+	setRefreshCookie(c, refreshToken, 30*24*60*60)
+	response.Raw(c, http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"user":        gin.H{"id": kepsekUserID, "email": "kepsek@system", "full_name": "Kepala Sekolah", "role": "kepala_sekolah"},
+			"accessToken": accessToken,
+		},
+	})
+}
+
 func (h *AuthHandler) Refresh(c *gin.Context) {
 	refreshToken, err := c.Cookie("refreshToken")
 	if err != nil {

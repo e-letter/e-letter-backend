@@ -335,12 +335,32 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 		return nil, fmt.Errorf("tidak ada tahun ajaran aktif")
 	}
 
-	// 3. Clear existing pending/active roles and assignments for this teacher first to prevent duplicates/orphans
+	// 3. Clear existing roles and assignments for this teacher to prevent duplicates/orphans
 	_, _ = tx.Exec(`DELETE FROM teacher_roles WHERE teacher_id = ?`, teacherID)
 	_, _ = tx.Exec(`UPDATE class_homeroom_assignments SET is_active = 0 WHERE teacher_id = ? AND academic_year_id = ?`, teacherID, academicYearID)
 	_, _ = tx.Exec(`UPDATE major_head_assignments SET is_active = 0 WHERE teacher_id = ? AND academic_year_id = ?`, teacherID, academicYearID)
 	_, _ = tx.Exec(`DELETE FROM teacher_subjects WHERE teacher_id = ? AND academic_year_id = ?`, teacherID, academicYearID)
 	_, _ = tx.Exec(`DELETE FROM schedules WHERE teacher_id = ? AND academic_year_id = ?`, teacherID, academicYearID)
+
+	// Precompute expected staging values per selected role.
+	expectedRoles := make(map[string]struct{}, len(payload.Roles))
+	for _, roleName := range payload.Roles {
+		expectedRoles[roleName] = struct{}{}
+	}
+
+	var expectedSubjectIDsStr sql.NullString
+	if _, ok := expectedRoles["guru_mapel"]; ok {
+		if len(payload.Subjects) == 0 {
+			// Fail fast rather than inserting an inconsistent guru_mapel role.
+			return nil, fmt.Errorf("guru_mapel dipilih tetapi tidak ada subjects")
+		}
+		parts := make([]string, len(payload.Subjects))
+		for i, id := range payload.Subjects {
+			parts[i] = strconv.Itoa(id)
+		}
+		expectedSubjectIDsStr.String = strings.Join(parts, ",")
+		expectedSubjectIDsStr.Valid = true
+	}
 
 	// 4. Process each selected role
 	for _, roleName := range payload.Roles {
@@ -348,11 +368,15 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 		var majorID sql.NullInt64
 		var subjectIDsStr sql.NullString
 
-		if roleName == "wali_kelas" && payload.HomeroomClassID > 0 {
+		switch roleName {
+		case "wali_kelas":
+			if payload.HomeroomClassID <= 0 {
+				return nil, fmt.Errorf("wali_kelas dipilih tetapi homeroom_class_id tidak valid")
+			}
 			homeroomClassID.Int64 = int64(payload.HomeroomClassID)
 			homeroomClassID.Valid = true
 
-			// Deactivate existing Wakel for this class
+			// Deactivate existing Wakel for this class (one active per class)
 			_, err = tx.Exec(
 				`UPDATE class_homeroom_assignments SET is_active = 0, updated_at = NOW()
 				 WHERE class_id = ? AND academic_year_id = ?`,
@@ -362,7 +386,7 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 				return nil, fmt.Errorf("gagal menonaktifkan wali kelas lama: %w", err)
 			}
 
-			// Insert new Wakel assignment
+			// Insert/activate new Wakel assignment
 			_, err = tx.Exec(
 				`INSERT INTO class_homeroom_assignments (class_id, teacher_id, academic_year_id, is_active)
 				 VALUES (?, ?, ?, 1)
@@ -372,13 +396,15 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 			if err != nil {
 				return nil, fmt.Errorf("gagal menyimpan wali kelas assignment: %w", err)
 			}
-		}
 
-		if roleName == "kapro" && payload.MajorID > 0 {
+		case "kapro":
+			if payload.MajorID <= 0 {
+				return nil, fmt.Errorf("kapro dipilih tetapi major_id tidak valid")
+			}
 			majorID.Int64 = int64(payload.MajorID)
 			majorID.Valid = true
 
-			// Deactivate existing Kapro for this major
+			// Deactivate existing Kapro for this major (one active per major)
 			_, err = tx.Exec(
 				`UPDATE major_head_assignments SET is_active = 0, updated_at = NOW()
 				 WHERE major_id = ? AND academic_year_id = ?`,
@@ -388,7 +414,6 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 				return nil, fmt.Errorf("gagal menonaktifkan kapro lama: %w", err)
 			}
 
-			// Insert new Kapro assignment
 			_, err = tx.Exec(
 				`INSERT INTO major_head_assignments (major_id, teacher_id, academic_year_id, is_active)
 				 VALUES (?, ?, ?, 1)
@@ -398,15 +423,13 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 			if err != nil {
 				return nil, fmt.Errorf("gagal menyimpan kepala program assignment: %w", err)
 			}
-		}
 
-		if roleName == "guru_mapel" && len(payload.Subjects) > 0 {
-			parts := make([]string, len(payload.Subjects))
-			for i, id := range payload.Subjects {
-				parts[i] = strconv.Itoa(id)
+		case "guru_mapel":
+			// teacher_roles staging should always match selected subjects
+			if !expectedSubjectIDsStr.Valid {
+				return nil, fmt.Errorf("guru_mapel dipilih tetapi subject staging tidak valid")
 			}
-			subjectIDsStr.String = strings.Join(parts, ",")
-			subjectIDsStr.Valid = true
+			subjectIDsStr = expectedSubjectIDsStr
 
 			// Insert teacher_subjects rows
 			for _, subjID := range payload.Subjects {
@@ -432,6 +455,9 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 					return nil, fmt.Errorf("gagal menyimpan jadwal mengajar: %w", err)
 				}
 			}
+
+		default:
+			return nil, fmt.Errorf("role guru tidak dikenal: %s", roleName)
 		}
 
 		// Save the active role to teacher_roles
@@ -443,6 +469,66 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 		)
 		if err != nil {
 			return nil, fmt.Errorf("gagal menyimpan peran guru: %w", err)
+		}
+	}
+
+	// 5. Transactional verification: ensure teacher_roles active rows match selected roles.
+	//    This prevents silent partial writes from being accepted.
+	for roleName := range expectedRoles {
+		var count int
+		err = tx.QueryRow(`
+			SELECT COUNT(1)
+			FROM teacher_roles
+			WHERE teacher_id = ? AND role_name = ? AND academic_year_id = ? AND status = 'active'
+		`, teacherID, roleName, academicYearID).Scan(&count)
+		if err != nil {
+			return nil, fmt.Errorf("verifikasi teacher_roles gagal untuk %s: %w", roleName, err)
+		}
+		if count != 1 {
+			return nil, fmt.Errorf("verifikasi teacher_roles gagal untuk %s: expected 1 active row, got %d", roleName, count)
+		}
+	}
+
+	// Verify staging columns for each role type.
+	if _, ok := expectedRoles["wali_kelas"]; ok {
+		var got sql.NullInt64
+		if err := tx.QueryRow(`
+			SELECT homeroom_class_id
+			FROM teacher_roles
+			WHERE teacher_id = ? AND role_name = 'wali_kelas' AND academic_year_id = ? AND status = 'active'
+		`, teacherID, academicYearID).Scan(&got); err != nil {
+			return nil, fmt.Errorf("verifikasi homeroom_class_id gagal: %w", err)
+		}
+		if !got.Valid || got.Int64 != int64(payload.HomeroomClassID) {
+			return nil, fmt.Errorf("homeroom_class_id tidak sesuai (expected %d, got %v)", payload.HomeroomClassID, got)
+		}
+	}
+
+	if _, ok := expectedRoles["kapro"]; ok {
+		var got sql.NullInt64
+		if err := tx.QueryRow(`
+			SELECT major_id
+			FROM teacher_roles
+			WHERE teacher_id = ? AND role_name = 'kapro' AND academic_year_id = ? AND status = 'active'
+		`, teacherID, academicYearID).Scan(&got); err != nil {
+			return nil, fmt.Errorf("verifikasi major_id gagal: %w", err)
+		}
+		if !got.Valid || got.Int64 != int64(payload.MajorID) {
+			return nil, fmt.Errorf("major_id tidak sesuai (expected %d, got %v)", payload.MajorID, got)
+		}
+	}
+
+	if _, ok := expectedRoles["guru_mapel"]; ok {
+		var got sql.NullString
+		if err := tx.QueryRow(`
+			SELECT subject_ids
+			FROM teacher_roles
+			WHERE teacher_id = ? AND role_name = 'guru_mapel' AND academic_year_id = ? AND status = 'active'
+		`, teacherID, academicYearID).Scan(&got); err != nil {
+			return nil, fmt.Errorf("verifikasi subject_ids gagal: %w", err)
+		}
+		if !got.Valid || strings.TrimSpace(got.String) != strings.TrimSpace(expectedSubjectIDsStr.String) {
+			return nil, fmt.Errorf("subject_ids tidak sesuai (expected %s, got %v)", expectedSubjectIDsStr.String, got)
 		}
 	}
 

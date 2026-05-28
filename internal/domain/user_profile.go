@@ -50,4 +50,3 @@ type CompleteTeacherOnboardingPayload struct {
 	Subjects        []int            `json:"subjects"`
 	Schedules       []ScheduleDetail `json:"schedules"`
 }
-
