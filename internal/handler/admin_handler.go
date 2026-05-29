@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -729,6 +731,87 @@ func (h *AdminHandler) UpdateSchoolConfig(c *gin.Context) {
 		h.db.Exec(`INSERT INTO school_config (config_key, config_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE config_value = ?`, k, v, v)
 	}
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Konfigurasi berhasil diperbarui"})
+}
+
+func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
+	configKey := c.PostForm("config_key")
+	if configKey == "" {
+		response.Error(c, http.StatusBadRequest, "config_key diperlukan")
+		return
+	}
+
+	// Validate config key
+	allowedKeys := map[string]bool{
+		"illustration_login_orange": true,
+		"illustration_login_blue":   true,
+		"illustration_register":     true,
+	}
+	if !allowedKeys[configKey] {
+		response.Error(c, http.StatusBadRequest, "config_key tidak valid")
+		return
+	}
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "File diperlukan")
+		return
+	}
+
+	// Limit 2MB
+	if file.Size > 2*1024*1024 {
+		response.Error(c, http.StatusBadRequest, "Ukuran file maksimal 2MB")
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
+		response.Error(c, http.StatusBadRequest, "Format file tidak didukung (hanya PNG, JPG, JPEG)")
+		return
+	}
+
+	contentType := file.Header.Get("Content-Type")
+	if !strings.HasPrefix(contentType, "image/") {
+		response.Error(c, http.StatusBadRequest, "File harus berupa gambar")
+		return
+	}
+
+	uploadDir := "public/uploads/config"
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		response.Error(c, http.StatusInternalServerError, "Gagal membuat direktori upload")
+		return
+	}
+
+	// Clean up other extensions to prevent old file residue
+	extensions := []string{".png", ".jpg", ".jpeg"}
+	for _, e := range extensions {
+		if e != ext {
+			_ = os.Remove(filepath.Join(uploadDir, configKey+e))
+		}
+	}
+
+	filename := configKey + ext
+	dst := filepath.Join(uploadDir, filename)
+
+	if err := c.SaveUploadedFile(file, dst); err != nil {
+		response.Error(c, http.StatusInternalServerError, "Gagal menyimpan file")
+		return
+	}
+
+	filePath := "/uploads/config/" + filename
+	_, dbErr := h.db.Exec(`INSERT INTO school_config (config_key, config_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE config_value = ?`, configKey, filePath, filePath)
+	if dbErr != nil {
+		response.Error(c, http.StatusInternalServerError, "Gagal menyimpan konfigurasi ke database: "+dbErr.Error())
+		return
+	}
+
+	response.Raw(c, http.StatusOK, gin.H{
+		"success": true,
+		"message": "File berhasil diunggah",
+		"data": gin.H{
+			"config_key": configKey,
+			"file_path":  filePath,
+		},
+	})
 }
 
 func (h *AdminHandler) GetAuditLogs(c *gin.Context) {

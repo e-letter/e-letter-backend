@@ -154,6 +154,7 @@ func SetupRouter(
 				admin.POST("/enrollments", adminHandler.CreateEnrollment)
 				admin.DELETE("/enrollments/:id", adminHandler.DeleteEnrollment)
 				admin.PUT("/config/school", adminHandler.UpdateSchoolConfig)
+				admin.POST("/config/upload", adminHandler.UploadConfigImage)
 				admin.GET("/audit-logs", adminHandler.GetAuditLogs)
 			}
 		}
