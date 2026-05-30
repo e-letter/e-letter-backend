@@ -24,6 +24,8 @@ func (h *PermissionHandler) GetRequests(c *gin.Context) {
 	idSiswa := c.Query("id_siswa")
 	action := c.Query("action")
 	nisn := c.Query("nisn")
+	startDate := c.Query("startDate")
+	endDate := c.Query("endDate")
 
 	userID := toIntFromContext(c, "userId")
 	userRole := c.GetString("userRole")
@@ -34,7 +36,7 @@ func (h *PermissionHandler) GetRequests(c *gin.Context) {
 		roleID = 1
 	}
 
-	out, err := h.service.Get(action, idSiswa, nisn, userID, roleID)
+	out, err := h.service.Get(action, idSiswa, nisn, userID, roleID, startDate, endDate)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if err.Error() == "Token akses diperlukan" {

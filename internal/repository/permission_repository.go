@@ -25,8 +25,28 @@ func NewPermissionRepository(db *sql.DB, schoolCode string, publisher Notificati
 	return &permissionRepository{db: db, schoolCode: schoolCode, publisher: publisher}
 }
 
-func (r *permissionRepository) ListAll() ([]domain.PermissionRequest, error) {
-	rows, err := r.db.Query(`SELECT id, request_type_id, request_number, requester_user_id, reason, request_date, start_time, end_time, status, current_step, created_at, updated_at FROM requests WHERE deleted_at IS NULL ORDER BY request_date DESC, created_at DESC`)
+func (r *permissionRepository) ListAll(startDate, endDate string) ([]domain.PermissionRequest, error) {
+	query := `
+		SELECT r.id, r.request_type_id, r.request_number, r.requester_user_id, r.reason, r.request_date, r.start_time, r.end_time, r.status, r.current_step, r.created_at, r.updated_at,
+		       sp.full_name AS student_name, c.class_name AS class_name
+		FROM requests r
+		LEFT JOIN student_profiles sp ON sp.user_id = r.requester_user_id
+		LEFT JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
+		LEFT JOIN classes c ON c.id = sce.class_id
+		WHERE r.deleted_at IS NULL
+	`
+	var args []any
+	if startDate != "" {
+		query += " AND r.request_date >= ?"
+		args = append(args, startDate)
+	}
+	if endDate != "" {
+		query += " AND r.request_date <= ?"
+		args = append(args, endDate)
+	}
+	query += " ORDER BY r.request_date DESC, r.created_at DESC"
+
+	rows, err := r.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -34,8 +54,28 @@ func (r *permissionRepository) ListAll() ([]domain.PermissionRequest, error) {
 	return scanPermissionRequests(rows)
 }
 
-func (r *permissionRepository) ListByUser(userID int) ([]domain.PermissionRequest, error) {
-	rows, err := r.db.Query(`SELECT id, request_type_id, request_number, requester_user_id, reason, request_date, start_time, end_time, status, current_step, created_at, updated_at FROM requests WHERE requester_user_id = ? AND deleted_at IS NULL ORDER BY request_date DESC, created_at DESC`, userID)
+func (r *permissionRepository) ListByUser(userID int, startDate, endDate string) ([]domain.PermissionRequest, error) {
+	query := `
+		SELECT r.id, r.request_type_id, r.request_number, r.requester_user_id, r.reason, r.request_date, r.start_time, r.end_time, r.status, r.current_step, r.created_at, r.updated_at,
+		       sp.full_name AS student_name, c.class_name AS class_name
+		FROM requests r
+		LEFT JOIN student_profiles sp ON sp.user_id = r.requester_user_id
+		LEFT JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
+		LEFT JOIN classes c ON c.id = sce.class_id
+		WHERE r.requester_user_id = ? AND r.deleted_at IS NULL
+	`
+	args := []any{userID}
+	if startDate != "" {
+		query += " AND r.request_date >= ?"
+		args = append(args, startDate)
+	}
+	if endDate != "" {
+		query += " AND r.request_date <= ?"
+		args = append(args, endDate)
+	}
+	query += " ORDER BY r.request_date DESC, r.created_at DESC"
+
+	rows, err := r.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -289,6 +329,101 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		return fmt.Errorf("approval step not found for this request")
 	}
 
+	// 2.5 Check time-bounded bypass & execute multi-role cascade
+	var elapsedMinutes int
+	var requestCode string
+	err = tx.QueryRow(`
+		SELECT TIMESTAMPDIFF(MINUTE, r.created_at, NOW()), rt.code
+		FROM requests r
+		JOIN request_types rt ON rt.id = r.request_type_id
+		WHERE r.id = ?
+	`, req.RequestID).Scan(&elapsedMinutes, &requestCode)
+	if err != nil {
+		return err
+	}
+
+	if requestCode == "izin_keluar" && elapsedMinutes > 30 && req.Status == "approved" {
+		// If older than 30 minutes, once any authorized role approves, remaining steps are auto-skipped (single-otoritas)
+		_, err = tx.Exec(
+			`UPDATE request_approvals
+			 SET status = 'skipped', notes = 'Auto-skipped: Disetujui melalui wewenang alternatif (lebih dari 30 menit).', acted_at = NOW(), updated_at = NOW()
+			 WHERE request_id = ? AND status = 'pending' AND deleted_at IS NULL`,
+			req.RequestID,
+		)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Otherwise, run the cascade multi-role auto-approval loop
+		for {
+			rowsPending, err := tx.Query(`
+				SELECT step_no FROM request_approvals
+				WHERE request_id = ? AND status = 'pending' AND deleted_at IS NULL
+				ORDER BY step_no ASC
+			`, req.RequestID)
+			if err != nil {
+				return err
+			}
+			
+			var pendingStepNos []int
+			for rowsPending.Next() {
+				var sn int
+				if err := rowsPending.Scan(&sn); err == nil {
+					pendingStepNos = append(pendingStepNos, sn)
+				}
+			}
+			rowsPending.Close()
+
+			if len(pendingStepNos) == 0 {
+				break
+			}
+
+			anyApprovedThisPass := false
+			for _, sn := range pendingStepNos {
+				cascadeTeacherID, _, cascadeRole, cascadeIsDelegated, cascadeDelegatedFromID, cascadeErr := ValidateApprovalStep(tx, req.RequestID, sn, approverID)
+				if cascadeErr == nil {
+					var cascadeRes sql.Result
+					if cascadeIsDelegated {
+						cascadeRes, err = tx.Exec(
+							`UPDATE request_approvals
+							 SET status = 'approved', notes = 'Auto-approved: Persetujuan multi-role sinkron.', acted_at = NOW(), updated_at = NOW(),
+							     is_delegated = 1, delegated_from_id = ?, approver_teacher_id = ?
+							 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
+							cascadeDelegatedFromID, cascadeTeacherID, req.RequestID, sn,
+						)
+					} else if cascadeRole == "tatib" {
+						cascadeRes, err = tx.Exec(
+							`UPDATE request_approvals
+							 SET status = 'approved', notes = 'Auto-approved: Persetujuan multi-role sinkron.', acted_at = NOW(), updated_at = NOW(),
+							     approver_teacher_id = ?
+							 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
+							cascadeTeacherID, req.RequestID, sn,
+						)
+					} else {
+						cascadeRes, err = tx.Exec(
+							`UPDATE request_approvals
+							 SET status = 'approved', notes = 'Auto-approved: Persetujuan multi-role sinkron.', acted_at = NOW(), updated_at = NOW()
+							 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
+							req.RequestID, sn,
+						)
+					}
+					if err != nil {
+						return err
+					}
+					affected, _ := cascadeRes.RowsAffected()
+					if affected > 0 {
+						anyApprovedThisPass = true
+						break
+					}
+				}
+			}
+
+			if !anyApprovedThisPass {
+				break
+			}
+		}
+	}
+
 	// 3. Determine request status: stays 'pending' unless all required steps done or one rejected
 	targetStatus := "pending"
 	if req.Status == "rejected" {
@@ -310,7 +445,14 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 	// Calculate and update current_step if this step is successfully approved
 	var currentStep int
 	if req.Status == "approved" || req.Status == "skipped" {
-		currentStep = req.StageID
+		err = tx.QueryRow(`
+			SELECT COALESCE(MAX(step_no), 0) FROM request_approvals
+			WHERE request_id = ? AND status IN ('approved', 'skipped') AND deleted_at IS NULL`,
+			req.RequestID,
+		).Scan(&currentStep)
+		if err != nil {
+			currentStep = req.StageID
+		}
 	} else {
 		currentStep = req.StageID - 1
 		if currentStep < 0 {
@@ -433,6 +575,8 @@ func scanPermissionRequests(rows *sql.Rows) ([]domain.PermissionRequest, error) 
 			&req.CurrentStep,
 			&req.CreatedAt,
 			&req.UpdatedAt,
+			&req.StudentName,
+			&req.ClassName,
 		); err != nil {
 			return nil, err
 		}

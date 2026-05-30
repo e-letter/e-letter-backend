@@ -15,6 +15,8 @@ type PermissionRequest struct {
 	CurrentStep     int       `json:"current_step" db:"current_step"`
 	CreatedAt       time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at" db:"updated_at"`
+	StudentName     *string   `json:"student_name,omitempty"`
+	ClassName       *string   `json:"class_name,omitempty"`
 }
 
 type PermissionClass struct {
@@ -89,8 +91,8 @@ type PendingTeacherRole struct {
 }
 
 type PermissionRepository interface {
-	ListAll() ([]PermissionRequest, error)
-	ListByUser(userID int) ([]PermissionRequest, error)
+	ListAll(startDate, endDate string) ([]PermissionRequest, error)
+	ListByUser(userID int, startDate, endDate string) ([]PermissionRequest, error)
 	ListClasses() ([]PermissionClass, error)
 	ListMajors() ([]PermissionMajor, error)
 	GetUserByNISN(nisn string) (*User, error)
@@ -115,7 +117,7 @@ type PermissionRepository interface {
 }
 
 type PermissionService interface {
-	Get(action, idSiswa, nisn string, userID int, roleID int) (any, error)
+	Get(action, idSiswa, nisn string, userID int, roleID int, startDate, endDate string) (any, error)
 	Create(req CreatePermissionRequest) (int, error)
 	Update(req UpdatePermissionRequest) error
 	Delete(id int) error

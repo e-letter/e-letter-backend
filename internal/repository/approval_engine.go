@@ -16,6 +16,21 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 	var callerPrincipalID sql.NullInt64
 	_ = tx.QueryRow(`SELECT id FROM principal_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL`, approverUserID).Scan(&callerPrincipalID)
 
+	// Fetch request time and type info to check for time-bounded rule bypasses
+	var elapsedMinutes int
+	var requestCode string
+	err := tx.QueryRow(`
+		SELECT TIMESTAMPDIFF(MINUTE, r.created_at, NOW()), rt.code
+		FROM requests r
+		JOIN request_types rt ON rt.id = r.request_type_id
+		WHERE r.id = ?
+	`, requestID).Scan(&elapsedMinutes, &requestCode)
+	if err != nil {
+		return 0, 0, "", false, 0, err
+	}
+
+	isIzinKeluarBypass := (requestCode == "izin_keluar" && elapsedMinutes > 30)
+
 	// 2. Fetch all active steps for this request
 	rows, err := tx.Query(`
 		SELECT step_no, approver_role, status, approver_teacher_id, approver_principal_id
@@ -55,10 +70,13 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 	}
 
 	// 3. Verify sequential order: all steps with stepNo < targetStep.stepNo must be approved or skipped
-	for _, s := range steps {
-		if s.stepNo < stepNo {
-			if s.status == "pending" {
-				return 0, 0, "", false, 0, errors.New("Persetujuan harus dilakukan secara berurutan. Langkah sebelumnya masih tertunda.")
+	// Sequential order is bypassed for Izin Keluar requests older than 30 minutes.
+	if !isIzinKeluarBypass {
+		for _, s := range steps {
+			if s.stepNo < stepNo {
+				if s.status == "pending" {
+					return 0, 0, "", false, 0, errors.New("Persetujuan harus dilakukan secara berurutan. Langkah sebelumnya masih tertunda.")
+				}
 			}
 		}
 	}
@@ -71,6 +89,14 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 	// 5. Check role authority
 	isDelegated := false
 	var delegatedFromID int64 = 0
+
+	// For Izin Keluar requests older than 30 minutes, any valid teacher (Wali Kelas, Guru Mapel, Kaprog, Tatib) can approve
+	if isIzinKeluarBypass && targetStep.approverRole != "kepala_sekolah" {
+		if !callerTeacherID.Valid {
+			return 0, 0, "", false, 0, errors.New("Anda harus memiliki profil guru yang aktif untuk menyetujui langkah ini.")
+		}
+		return callerTeacherID.Int64, 0, targetStep.approverRole, false, 0, nil
+	}
 
 	switch targetStep.approverRole {
 	case "tatib":
