@@ -219,7 +219,7 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 			if _, err := tx.Exec(
 				`INSERT INTO class_homeroom_assignments (class_id, teacher_id, academic_year_id, is_active)
 				 VALUES (?, ?, ?, 1)
-				 ON DUPLICATE KEY UPDATE is_active = 1, updated_at = NOW()`,
+				 ON DUPLICATE KEY UPDATE teacher_id = VALUES(teacher_id), is_active = 1, updated_at = NOW()`,
 				homeroomClassID.Int64, teacherID, academicYearID,
 			); err != nil {
 				response.Error(c, http.StatusInternalServerError, err.Error())
@@ -241,7 +241,7 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 			if _, err := tx.Exec(
 				`INSERT INTO major_head_assignments (major_id, teacher_id, academic_year_id, is_active)
 				 VALUES (?, ?, ?, 1)
-				 ON DUPLICATE KEY UPDATE is_active = 1, updated_at = NOW()`,
+				 ON DUPLICATE KEY UPDATE teacher_id = VALUES(teacher_id), is_active = 1, updated_at = NOW()`,
 				majorID.Int64, teacherID, academicYearID,
 			); err != nil {
 				response.Error(c, http.StatusInternalServerError, err.Error())

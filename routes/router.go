@@ -69,6 +69,7 @@ func SetupRouter(
 			protected.DELETE("/permission-requests", permissionHandler.DeleteRequest)
 			protected.POST("/permission-requests/:id/cancel", permissionHandler.CancelRequest)
 			protected.GET("/permission-requests/:id/detail", permissionHandler.GetRequestDetail)
+			protected.GET("/request-detail/:id", permissionHandler.GetRequestDetail)
 			protected.POST("/approve", permissionHandler.Approve)
 
 			// Letters

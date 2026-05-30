@@ -404,7 +404,7 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 			_, err = tx.Exec(
 				`INSERT INTO class_homeroom_assignments (class_id, teacher_id, academic_year_id, is_active)
 				 VALUES (?, ?, ?, 1)
-				 ON DUPLICATE KEY UPDATE is_active = 1, updated_at = NOW()`,
+				 ON DUPLICATE KEY UPDATE teacher_id = VALUES(teacher_id), is_active = 1, updated_at = NOW()`,
 				payload.HomeroomClassID, teacherID, academicYearID,
 			)
 			if err != nil {
@@ -431,7 +431,7 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 			_, err = tx.Exec(
 				`INSERT INTO major_head_assignments (major_id, teacher_id, academic_year_id, is_active)
 				 VALUES (?, ?, ?, 1)
-				 ON DUPLICATE KEY UPDATE is_active = 1, updated_at = NOW()`,
+				 ON DUPLICATE KEY UPDATE teacher_id = VALUES(teacher_id), is_active = 1, updated_at = NOW()`,
 				payload.MajorID, teacherID, academicYearID,
 			)
 			if err != nil {
@@ -469,6 +469,10 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 					return nil, fmt.Errorf("gagal menyimpan jadwal mengajar: %w", err)
 				}
 			}
+
+		case "tatib":
+			// 'tatib' is a general administrative role that does not require additional class/major assignments.
+			break
 
 		default:
 			return nil, fmt.Errorf("role guru tidak dikenal: %s", roleName)

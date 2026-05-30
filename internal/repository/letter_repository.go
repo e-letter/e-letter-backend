@@ -55,6 +55,17 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 				return 0, err
 			}
 		}
+	} else {
+		// Fallback: check if the requester has a student profile, and insert their student ID into request_students
+		var studentID int
+		err := tx.QueryRow(`SELECT id FROM student_profiles WHERE user_id = ?`, userID).Scan(&studentID)
+		if err == nil {
+			if _, err := tx.Exec(`INSERT INTO request_students (request_id, student_id) VALUES (?, ?)`, requestID, studentID); err != nil {
+				return 0, err
+			}
+		} else if err != sql.ErrNoRows {
+			return 0, err
+		}
 	}
 
 	// --- Approval Orchestration ---
@@ -70,7 +81,7 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 
 	body := fmt.Sprintf("Permohonan Anda dengan nomor %s telah dikirim dan menunggu persetujuan.", requestNumber)
 	requestID64 := int64(requestID)
-	if err := createNotificationTx(tx, int64(userID), "request_submitted", "Permohonan terkirim", &body, &requestID64, nil); err != nil {
+	if err := createNotificationTx(tx, int64(userID), "new_request", "Permohonan terkirim", &body, &requestID64, nil); err != nil {
 		return 0, err
 	}
 
@@ -421,7 +432,7 @@ func scanLetterRows(rows *sql.Rows) ([]domain.LetterListItem, error) {
 		var (
 			id, title, description, status, fullName, className, nisn, email string
 			requestDate, createdAt, updatedAt                                time.Time
-			startTime, endTime                                               sql.NullTime
+			startTime, endTime                                               sql.NullString
 		)
 		var idInt int
 		if err := rows.Scan(&idInt, &title, &description, &status, &requestDate, &createdAt, &updatedAt, &startTime, &endTime, &fullName, &className, &nisn, &email); err != nil {
@@ -492,11 +503,11 @@ func approvedDate(status string, updatedAt time.Time) string {
 	return "-"
 }
 
-func formatNullableTime(t sql.NullTime) string {
+func formatNullableTime(t sql.NullString) string {
 	if !t.Valid {
 		return "-"
 	}
-	return t.Time.Format("15:04:05")
+	return t.String
 }
 
 func coalesceTitle(v string) string {
@@ -530,16 +541,17 @@ func (r *letterRepository) ListGeneralDispensasi(userRole string, userID int, pa
 		`, scopeFilter)
 
 		selectQuery = fmt.Sprintf(`
-			SELECT DISTINCT r.id, rt.label, r.reason, r.status, r.created_at, r.updated_at, r.start_time, r.end_time,
-			       COALESCE(tp.full_name,''), '-', COALESCE(tp.employee_code,'-'), COALESCE(u.email,'-')
+			SELECT r.id, rt.label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
+			       COALESCE(sp.full_name,''), COALESCE(c.class_name,'-'), COALESCE(sp.student_code,'-'), COALESCE(u.email,'-')
 			FROM requests r
 			JOIN request_types rt ON rt.id = r.request_type_id
 			JOIN users u ON u.id = r.requester_user_id
-			LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 			JOIN request_students rs ON rs.request_id = r.id
 			JOIN student_profiles sp ON sp.id = rs.student_id
 			JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
+			LEFT JOIN classes c ON c.id = sce.class_id
 			WHERE rt.code = 'dispensasi' AND r.deleted_at IS NULL AND (%s)
+			GROUP BY r.id
 			ORDER BY r.created_at DESC
 			LIMIT ? OFFSET ?
 		`, scopeFilter)
@@ -552,13 +564,17 @@ func (r *letterRepository) ListGeneralDispensasi(userRole string, userID int, pa
 		`
 
 		selectQuery = `
-			SELECT DISTINCT r.id, rt.label, r.reason, r.status, r.created_at, r.updated_at, r.start_time, r.end_time,
-			       COALESCE(tp.full_name,''), '-', COALESCE(tp.employee_code,'-'), COALESCE(u.email,'-')
+			SELECT r.id, rt.label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
+			       COALESCE(sp.full_name,''), COALESCE(c.class_name,'-'), COALESCE(sp.student_code,'-'), COALESCE(u.email,'-')
 			FROM requests r
 			JOIN request_types rt ON rt.id = r.request_type_id
 			JOIN users u ON u.id = r.requester_user_id
-			LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
+			JOIN request_students rs ON rs.request_id = r.id
+			JOIN student_profiles sp ON sp.id = rs.student_id
+			JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
+			LEFT JOIN classes c ON c.id = sce.class_id
 			WHERE rt.code = 'dispensasi' AND r.deleted_at IS NULL
+			GROUP BY r.id
 			ORDER BY r.created_at DESC
 			LIMIT ? OFFSET ?
 		`
@@ -626,9 +642,9 @@ func (r *letterRepository) ListLettersForTeacherScoped(userID int, typeKey strin
 		SELECT COUNT(DISTINCT r.id)
 		FROM requests r
 		JOIN request_types rt ON rt.id = r.request_type_id
-		JOIN users u ON u.id = r.requester_user_id
-		LEFT JOIN student_profiles sp ON sp.user_id = u.id
-		LEFT JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
+		JOIN request_students rs ON rs.request_id = r.id
+		JOIN student_profiles sp ON sp.id = rs.student_id
+		JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
 		WHERE rt.code = ? AND r.deleted_at IS NULL AND (%s)
 	`, scopeFilter)
 
@@ -638,15 +654,17 @@ func (r *letterRepository) ListLettersForTeacherScoped(userID int, typeKey strin
 	}
 
 	rows, err := r.db.Query(fmt.Sprintf(`
-		SELECT DISTINCT r.id, rt.label, r.reason, r.status, r.created_at, r.updated_at, r.start_time, r.end_time,
+		SELECT r.id, rt.label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
 		       COALESCE(sp.full_name,''), COALESCE(c.class_name,'-'), COALESCE(sp.student_code,'-'), COALESCE(u.email,'-')
 		FROM requests r
 		JOIN request_types rt ON rt.id = r.request_type_id
 		JOIN users u ON u.id = r.requester_user_id
-		LEFT JOIN student_profiles sp ON sp.user_id = u.id
-		LEFT JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
+		JOIN request_students rs ON rs.request_id = r.id
+		JOIN student_profiles sp ON sp.id = rs.student_id
+		JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
 		LEFT JOIN classes c ON c.id = sce.class_id
 		WHERE rt.code = ? AND r.deleted_at IS NULL AND (%s)
+		GROUP BY r.id
 		ORDER BY r.created_at DESC
 		LIMIT ? OFFSET ?
 	`, scopeFilter), typeKey, limit, offset)
@@ -686,7 +704,7 @@ func (r *letterRepository) ListPendingForTeacher(userID int, page, limit int) (*
 	}
 
 	rows, err := r.db.Query(`
-		SELECT v.request_id, v.request_type_label, v.reason, 'pending', v.submitted_at, v.submitted_at, v.start_time, v.end_time,
+		SELECT v.request_id, v.request_type_label, v.reason, 'pending', v.submitted_at, v.submitted_at, v.submitted_at, v.start_time, v.end_time,
 		       COALESCE(v.requester_name,''), '-', '-', COALESCE(v.requester_email,'-')
 		FROM v_pending_approvals_for_teacher v
 		JOIN teacher_profiles tp ON tp.id = v.approver_teacher_id
@@ -724,7 +742,7 @@ func (r *letterRepository) ListTeacherLetters(userID int, page, limit int) (*dom
 	}
 
 	rows, err := r.db.Query(`
-		SELECT r.id, rt.label, r.reason, r.status, r.created_at, r.updated_at, r.start_time, r.end_time,
+		SELECT r.id, rt.label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
 		       COALESCE(tp.full_name,''), '-', COALESCE(tp.employee_code,'-'), COALESCE(u.email,'-')
 		FROM requests r
 		JOIN request_types rt ON rt.id = r.request_type_id

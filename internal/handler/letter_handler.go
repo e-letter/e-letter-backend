@@ -146,7 +146,7 @@ func (h *LetterHandler) KepsekPending(c *gin.Context) {
 			id                        int
 			typeLabel, reason, status string
 			requestDate, submittedAt  time.Time
-			startTime, endTime        sql.NullTime
+			startTime, endTime        sql.NullString
 			requesterName, className  string
 			code, email               string
 		)
@@ -159,12 +159,12 @@ func (h *LetterHandler) KepsekPending(c *gin.Context) {
 			return
 		}
 		start := "-"
-		if startTime.Valid {
-			start = startTime.Time.Format("15:04")
+		if startTime.Valid && len(startTime.String) >= 5 {
+			start = startTime.String[:5]
 		}
 		end := "-"
-		if endTime.Valid {
-			end = endTime.Time.Format("15:04")
+		if endTime.Valid && len(endTime.String) >= 5 {
+			end = endTime.String[:5]
 		}
 		items = append(items, PendingItem{
 			ID:          id,

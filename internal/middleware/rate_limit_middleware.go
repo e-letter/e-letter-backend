@@ -57,8 +57,9 @@ func (r *RedisRateLimiter) LoginRateLimiter() gin.HandlerFunc {
 			return
 		}
 
-		// Set expiration on first request
-		if val == 1 {
+		// Set expiration on first request or if key exists but has no expiration (TTL = -1ns)
+		ttl, err := r.client.TTL(ctx, key).Result()
+		if err == nil && (val == 1 || ttl == -1*time.Nanosecond) {
 			r.client.Expire(ctx, key, r.window)
 		}
 

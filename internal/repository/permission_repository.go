@@ -154,7 +154,7 @@ func (r *permissionRepository) Create(req domain.CreatePermissionRequest) (int, 
 
 	requestID := int64(id)
 	body := fmt.Sprintf("Permohonan Anda dengan nomor %s telah dikirim dan menunggu persetujuan.", requestNumber)
-	if err := createNotificationTx(tx, int64(req.IDSiswa), "request_submitted", "Permohonan terkirim", &body, &requestID, nil); err != nil {
+	if err := createNotificationTx(tx, int64(req.IDSiswa), "new_request", "Permohonan terkirim", &body, &requestID, nil); err != nil {
 		return 0, err
 	}
 
@@ -332,13 +332,13 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 	var notifType, notifTitle string
 	switch targetStatus {
 	case "approved":
-		notifType = "request_approved"
+		notifType = "approved"
 		notifTitle = "Permohonan disetujui"
 	case "rejected":
-		notifType = "request_rejected"
+		notifType = "rejected"
 		notifTitle = "Permohonan ditolak"
 	default:
-		notifType = "request_updated"
+		notifType = "approved"
 		notifTitle = "Permohonan diperbarui"
 	}
 	if err := createNotificationTx(tx, requestOwnerID, notifType, notifTitle, &body, ptrInt64(int64(req.RequestID)), nil); err != nil {
@@ -474,7 +474,7 @@ func (r *permissionRepository) CancelRequest(requestID, userID int, reason strin
 	}
 
 	body := fmt.Sprintf("Permohonan Anda (%s) telah dibatalkan.", requestNumber)
-	if err := createNotificationTx(tx, int64(userID), "request_cancelled", "Permohonan dibatalkan", &body, ptrInt64(int64(requestID)), nil); err != nil {
+	if err := createNotificationTx(tx, int64(userID), "cancelled", "Permohonan dibatalkan", &body, ptrInt64(int64(requestID)), nil); err != nil {
 		return err
 	}
 
