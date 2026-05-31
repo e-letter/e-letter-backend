@@ -817,7 +817,12 @@ func (h *AdminHandler) GetAuditLogs(c *gin.Context) {
 	limit := 50
 	offset := (page - 1) * limit
 
-	rows, err := h.db.Query(`SELECT id, user_id, action, details, ip_address, created_at FROM audit_logs ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+	rows, err := h.db.Query(`
+		SELECT id, user_id, activity_type AS action, description AS details, ip_address, created_at 
+		FROM activity_logs 
+		ORDER BY created_at DESC 
+		LIMIT ? OFFSET ?
+	`, limit, offset)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
@@ -825,7 +830,7 @@ func (h *AdminHandler) GetAuditLogs(c *gin.Context) {
 	defer rows.Close()
 	type Log struct {
 		ID        int     `json:"id"`
-		UserID    int     `json:"user_id"`
+		UserID    *int    `json:"user_id"`
 		Action    string  `json:"action"`
 		Details   *string `json:"details"`
 		IPAddress *string `json:"ip_address"`
@@ -834,7 +839,10 @@ func (h *AdminHandler) GetAuditLogs(c *gin.Context) {
 	var logs []Log
 	for rows.Next() {
 		var l Log
-		rows.Scan(&l.ID, &l.UserID, &l.Action, &l.Details, &l.IPAddress, &l.CreatedAt)
+		if err := rows.Scan(&l.ID, &l.UserID, &l.Action, &l.Details, &l.IPAddress, &l.CreatedAt); err != nil {
+			response.Error(c, http.StatusInternalServerError, "Gagal memindai log: "+err.Error())
+			return
+		}
 		logs = append(logs, l)
 	}
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": logs})

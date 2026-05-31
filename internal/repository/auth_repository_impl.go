@@ -190,33 +190,14 @@ func (r *authRepository) GetUserByID(userID int) (*domain.User, error) {
 	return scanUser(row)
 }
 
+// GetRegistrationToken is a no-op: registration_tokens table was removed from the schema.
 func (r *authRepository) GetRegistrationToken(token string) (*domain.TokenRecord, error) {
-	row := r.db.QueryRow(
-		`SELECT token_id, 0 AS user_id, token, expires_at, used_count, usage_limit
-		 FROM registration_tokens WHERE token = ? AND used_count < usage_limit AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1`,
-		token,
-	)
-	var rec domain.TokenRecord
-	var usageLimit sql.NullInt64
-	var expiresAt sql.NullTime
-	if err := row.Scan(&rec.TokenID, &rec.UserID, &rec.TokenHash, &expiresAt, &rec.UsedCount, &usageLimit); err != nil {
-		return nil, err
-	}
-	if expiresAt.Valid {
-		rec.ExpiresAt = &expiresAt.Time
-	}
-	if usageLimit.Valid {
-		v := int(usageLimit.Int64)
-		rec.UsageLimit = &v
-	}
-	rec.TokenType = "registration"
-	rec.IsRevoked = false
-	return &rec, nil
+	return nil, sql.ErrNoRows
 }
 
+// IncrementRegistrationTokenUsage is a no-op: registration_tokens table was removed from the schema.
 func (r *authRepository) IncrementRegistrationTokenUsage(token string) error {
-	_, err := r.db.Exec(`UPDATE registration_tokens SET used_count = used_count + 1 WHERE token = ?`, token)
-	return err
+	return nil
 }
 
 func (r *authRepository) StoreRefreshToken(userID int, tokenHash string, expiresAt time.Time) error {
@@ -244,6 +225,8 @@ func (r *authRepository) GetRefreshToken(tokenHash string) (*domain.TokenRecord,
 	rec.TokenType = "refresh"
 	rec.UsageLimit = nil
 	rec.UsedCount = 0
+	// Track last usage as required by jwt_tokens.last_used_at schema contract.
+	_, _ = r.db.Exec(`UPDATE jwt_tokens SET last_used_at = NOW() WHERE token_hash = ?`, tokenHash)
 	return &rec, nil
 }
 
@@ -257,9 +240,29 @@ func (r *authRepository) RevokeRefreshTokensByUserID(userID int) error {
 	return err
 }
 
-// LogLoginAttempt is a no-op: login_logs table does not exist in the schema.
+// LogLoginAttempt logs successful and failed login attempts to the activity_logs table.
 func (r *authRepository) LogLoginAttempt(attempt domain.LoginAttempt) error {
-	return nil
+	var userID *int
+	if attempt.UserID != nil {
+		userID = attempt.UserID
+	}
+
+	activityType := "login"
+	description := "Login berhasil"
+	if !attempt.Success {
+		activityType = "login_failed"
+		if attempt.EmailAttempted != nil {
+			description = "Login gagal untuk email/identifier: " + *attempt.EmailAttempted
+		} else {
+			description = "Login gagal: password salah"
+		}
+	}
+
+	_, err := r.db.Exec(`
+		INSERT INTO activity_logs (user_id, activity_type, description, ip_address, user_agent)
+		VALUES (?, ?, ?, ?, ?)
+	`, userID, activityType, description, attempt.IPAddress, attempt.UserAgent)
+	return err
 }
 
 // GetTeacherSubRoles fetches active sub-roles for a teacher user.
@@ -323,37 +326,38 @@ func scanUser(row *sql.Row) (*domain.User, error) {
 	return &user, nil
 }
 
-func (r *authRepository) CreatePasswordResetToken(userID int, otpHash string, expiresAt time.Time, ip string) error {
-	// Invalidate previous tokens for this user
-	_, _ = r.db.Exec(`UPDATE password_reset_tokens SET is_used = 1 WHERE user_id = ? AND is_used = 0`, userID)
+func (r *authRepository) CreatePasswordResetToken(userID int, otpCode string, expiresAt time.Time, ip string) error {
+	// Invalidate any previous unused OTPs for this user.
+	// Schema uses used_at IS NULL to denote an active (unused) token.
+	_, _ = r.db.Exec(`UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL`, userID)
 	_, err := r.db.Exec(
-		`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, ip_address) VALUES (?, ?, ?, ?)`,
-		userID, otpHash, expiresAt, ip,
+		`INSERT INTO password_reset_tokens (user_id, otp_code, expires_at, ip_address) VALUES (?, ?, ?, ?)`,
+		userID, otpCode, expiresAt, ip,
 	)
 	return err
 }
 
-func (r *authRepository) VerifyPasswordResetOTP(email, otpHash string) (int, error) {
+func (r *authRepository) VerifyPasswordResetOTP(email, otpCode string) (int, error) {
 	var userID int
 	err := r.db.QueryRow(`
 		SELECT prt.user_id FROM password_reset_tokens prt
 		JOIN users u ON u.id = prt.user_id
-		WHERE u.email = ? AND prt.token_hash = ? AND prt.is_used = 0 AND prt.expires_at > NOW()
+		WHERE u.email = ? AND prt.otp_code = ? AND prt.used_at IS NULL AND prt.expires_at > NOW()
 		LIMIT 1
-	`, email, otpHash).Scan(&userID)
+	`, email, otpCode).Scan(&userID)
 	if err != nil {
 		return 0, err
 	}
 	return userID, nil
 }
 
-func (r *authRepository) MarkPasswordResetUsed(email, otpHash string) error {
+func (r *authRepository) MarkPasswordResetUsed(email, otpCode string) error {
 	_, err := r.db.Exec(`
 		UPDATE password_reset_tokens prt
 		JOIN users u ON u.id = prt.user_id
-		SET prt.is_used = 1, prt.used_at = NOW()
-		WHERE u.email = ? AND prt.token_hash = ?
-	`, email, otpHash)
+		SET prt.used_at = NOW()
+		WHERE u.email = ? AND prt.otp_code = ? AND prt.used_at IS NULL
+	`, email, otpCode)
 	return err
 }
 
