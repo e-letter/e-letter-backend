@@ -39,7 +39,7 @@ func (r *authRepository) GetUserByLoginIdentifiers(id string) (*domain.User, err
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
 		LEFT JOIN principal_profiles pp ON pp.user_id = u.id
 		WHERE (u.username = ? OR u.email = ? OR sp.student_code = ? OR tp.employee_code = ? OR pp.employee_code = ?)
-		  AND u.status = 'active' AND u.deleted_at IS NULL
+		  AND u.status IN ('active', 'pending') AND u.deleted_at IS NULL
 		LIMIT 1
 	`
 	row := r.db.QueryRow(query, id, id, id, id, id)

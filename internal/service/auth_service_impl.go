@@ -121,12 +121,9 @@ func (s *authService) Login(req domain.LoginRequest, ip, userAgent string) (*dom
 		return nil, "", "", errors.New("ID atau kata sandi tidak valid")
 	}
 
-	// GetUserByLoginIdentifiers only returns active users. If we get here from a pending-state
-	// user that somehow passed the active filter, block them. More importantly, this guard
-	// also handles any future code path that might call Login before the status is enforced
-	// at the repository level.
+	// Handle pending users. If the user status is pending, block the login and return the specific error message.
 	if user.Status == "pending" {
-		return nil, "", "", errors.New("Akun Anda sedang menunggu persetujuan admin. Silakan hubungi administrator sekolah.")
+		return nil, "", "", errors.New("akun masih belum di aktivasi/disetujui oleh admin")
 	}
 
 	uid := user.ID
