@@ -329,11 +329,19 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		return fmt.Errorf("approval step not found for this request")
 	}
 
-	// 2.5 Check time-bounded bypass & execute multi-role cascade
+	// 2.5 Time-bounded bypass (izin_keluar >30 min) & multi-role cascade
+	//
+	// RBAC.md §9 rules:
+	//   • Within 30 min: strictly sequential (guru_mapel → wali_kelas → kapro → tatib).
+	//   • After  30 min: kapro may approve on behalf of guru_mapel & wali_kelas; those pending
+	//     steps are auto-skipped immediately. Kapro's own step is then handled normally.
+	//     Tatib is ALWAYS mandatory and is NEVER auto-skipped.
+	//   • Multi-role: when the acting user holds multiple roles that overlap with pending steps,
+	//     the cascade loop below auto-approves those steps on their behalf.
 	var elapsedMinutes int
 	var requestCode string
 	err = tx.QueryRow(`
-		SELECT TIMESTAMPDIFF(MINUTE, r.created_at, NOW()), rt.code
+		SELECT TIMESTAMPDIFF(MINUTE, r.submitted_at, NOW()), rt.code
 		FROM requests r
 		JOIN request_types rt ON rt.id = r.request_type_id
 		WHERE r.id = ?
@@ -342,85 +350,119 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		return err
 	}
 
-	if requestCode == "izin_keluar" && elapsedMinutes > 30 && req.Status == "approved" {
-		// If older than 30 minutes, once any authorized role approves, remaining steps are auto-skipped (single-otoritas)
-		_, err = tx.Exec(
-			`UPDATE request_approvals
-			 SET status = 'skipped', notes = 'Auto-skipped: Disetujui melalui wewenang alternatif (lebih dari 30 menit).', acted_at = NOW(), updated_at = NOW()
-			 WHERE request_id = ? AND status = 'pending' AND deleted_at IS NULL`,
-			req.RequestID,
-		)
+	isIzinKeluarLate := requestCode == "izin_keluar" && elapsedMinutes > 30
+
+	if isIzinKeluarLate && req.Status == "approved" {
+		// Check if the acting approver is kapro (bypass authority).
+		// Kapro is NOT a step in the flow; they approve on behalf of guru_mapel / wali_kelas.
+		// Once kapro acts on any bypassable step, auto-skip all remaining guru_mapel / wali_kelas
+		// steps that are still pending. Tatib is intentionally excluded — it must still approve.
+		var callerTeacherID sql.NullInt64
+		_ = tx.QueryRow(
+			`SELECT id FROM teacher_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL`,
+			approverID,
+		).Scan(&callerTeacherID)
+
+		if callerTeacherID.Valid {
+			var isKapro bool
+			_ = tx.QueryRow(`
+				SELECT EXISTS(
+					SELECT 1 FROM teacher_roles
+					WHERE teacher_id = ? AND role_name = 'kapro' AND status = 'active'
+				)
+			`, callerTeacherID.Int64).Scan(&isKapro)
+
+			if isKapro {
+				_, err = tx.Exec(`
+					UPDATE request_approvals
+					SET status = 'skipped',
+					    notes = 'Auto-skipped: Disetujui oleh Kapro sebagai perwakilan (lebih dari 30 menit).',
+					    acted_at = NOW(), updated_at = NOW()
+					WHERE request_id = ? AND status = 'pending'
+					  AND approver_role IN ('guru_mapel', 'wali_kelas')
+					  AND deleted_at IS NULL`,
+					req.RequestID,
+				)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	// Multi-role cascade: check if the approver holds additional roles that can cover
+	// any remaining pending steps (e.g. a teacher who is both guru_mapel and tatib).
+	for {
+		rowsPending, err := tx.Query(`
+			SELECT step_no FROM request_approvals
+			WHERE request_id = ? AND status = 'pending' AND deleted_at IS NULL
+			ORDER BY step_no ASC
+		`, req.RequestID)
 		if err != nil {
 			return err
 		}
-	} else {
-		// Otherwise, run the cascade multi-role auto-approval loop
-		for {
-			rowsPending, err := tx.Query(`
-				SELECT step_no FROM request_approvals
-				WHERE request_id = ? AND status = 'pending' AND deleted_at IS NULL
-				ORDER BY step_no ASC
-			`, req.RequestID)
-			if err != nil {
-				return err
+
+		var pendingStepNos []int
+		for rowsPending.Next() {
+			var sn int
+			if err := rowsPending.Scan(&sn); err == nil {
+				pendingStepNos = append(pendingStepNos, sn)
 			}
-			
-			var pendingStepNos []int
-			for rowsPending.Next() {
-				var sn int
-				if err := rowsPending.Scan(&sn); err == nil {
-					pendingStepNos = append(pendingStepNos, sn)
+		}
+		rowsPending.Close()
+
+		if len(pendingStepNos) == 0 {
+			break
+		}
+
+		anyApprovedThisPass := false
+		for _, sn := range pendingStepNos {
+			cascadeTeacherID, _, cascadeRole, cascadeIsDelegated, cascadeDelegatedFromID, cascadeErr := ValidateApprovalStep(tx, req.RequestID, sn, approverID)
+			if cascadeErr == nil {
+				var cascadeRes sql.Result
+				if cascadeIsDelegated {
+					cascadeRes, err = tx.Exec(`
+						UPDATE request_approvals
+						SET status = 'approved',
+						    notes = 'Auto-approved: Persetujuan multi-role sinkron.',
+						    acted_at = NOW(), updated_at = NOW(),
+						    is_delegated = 1, delegated_from_id = ?, approver_teacher_id = ?
+						WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
+						cascadeDelegatedFromID, cascadeTeacherID, req.RequestID, sn,
+					)
+				} else if cascadeRole == "tatib" {
+					cascadeRes, err = tx.Exec(`
+						UPDATE request_approvals
+						SET status = 'approved',
+						    notes = 'Auto-approved: Persetujuan multi-role sinkron.',
+						    acted_at = NOW(), updated_at = NOW(),
+						    approver_teacher_id = ?
+						WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
+						cascadeTeacherID, req.RequestID, sn,
+					)
+				} else {
+					cascadeRes, err = tx.Exec(`
+						UPDATE request_approvals
+						SET status = 'approved',
+						    notes = 'Auto-approved: Persetujuan multi-role sinkron.',
+						    acted_at = NOW(), updated_at = NOW()
+						WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
+						req.RequestID, sn,
+					)
+				}
+				if err != nil {
+					return err
+				}
+				affected, _ := cascadeRes.RowsAffected()
+				if affected > 0 {
+					anyApprovedThisPass = true
+					break
 				}
 			}
-			rowsPending.Close()
+		}
 
-			if len(pendingStepNos) == 0 {
-				break
-			}
-
-			anyApprovedThisPass := false
-			for _, sn := range pendingStepNos {
-				cascadeTeacherID, _, cascadeRole, cascadeIsDelegated, cascadeDelegatedFromID, cascadeErr := ValidateApprovalStep(tx, req.RequestID, sn, approverID)
-				if cascadeErr == nil {
-					var cascadeRes sql.Result
-					if cascadeIsDelegated {
-						cascadeRes, err = tx.Exec(
-							`UPDATE request_approvals
-							 SET status = 'approved', notes = 'Auto-approved: Persetujuan multi-role sinkron.', acted_at = NOW(), updated_at = NOW(),
-							     is_delegated = 1, delegated_from_id = ?, approver_teacher_id = ?
-							 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
-							cascadeDelegatedFromID, cascadeTeacherID, req.RequestID, sn,
-						)
-					} else if cascadeRole == "tatib" {
-						cascadeRes, err = tx.Exec(
-							`UPDATE request_approvals
-							 SET status = 'approved', notes = 'Auto-approved: Persetujuan multi-role sinkron.', acted_at = NOW(), updated_at = NOW(),
-							     approver_teacher_id = ?
-							 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
-							cascadeTeacherID, req.RequestID, sn,
-						)
-					} else {
-						cascadeRes, err = tx.Exec(
-							`UPDATE request_approvals
-							 SET status = 'approved', notes = 'Auto-approved: Persetujuan multi-role sinkron.', acted_at = NOW(), updated_at = NOW()
-							 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
-							req.RequestID, sn,
-						)
-					}
-					if err != nil {
-						return err
-					}
-					affected, _ := cascadeRes.RowsAffected()
-					if affected > 0 {
-						anyApprovedThisPass = true
-						break
-					}
-				}
-			}
-
-			if !anyApprovedThisPass {
-				break
-			}
+		if !anyApprovedThisPass {
+			break
 		}
 	}
 

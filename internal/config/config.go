@@ -61,6 +61,51 @@ type RedisConfig struct {
 }
 
 type RateLimitConfig struct {
-	MaxAttempts    int           // Maximum login attempts
-	WindowDuration time.Duration // Time window for rate limiting
+	// Login endpoints (IP-based) — prevents brute force per source
+	LoginMax    int           // Max login attempts per IP
+	LoginWindow time.Duration // Window for login rate limit
+
+	// Admin/Kepsek login (IP-based, stricter)
+	LoginAdminMax    int
+	LoginAdminWindow time.Duration
+
+	// Registration (IP-based)
+	RegisterMax    int
+	RegisterWindow time.Duration
+
+	// Password reset flow (IP-based) — prevents OTP brute force & email flooding
+	ForgotPasswordMax    int
+	ForgotPasswordWindow time.Duration
+	VerifyOTPMax         int
+	VerifyOTPWindow      time.Duration
+	ResetPasswordMax     int
+	ResetPasswordWindow  time.Duration
+
+	// Token refresh (IP-based, cookie-driven — no userId available)
+	RefreshMax    int
+	RefreshWindow time.Duration
+
+	// Write operations (user-based) — each user gets own counter
+	WriteMax    int
+	WriteWindow time.Duration
+
+	// Read/list operations (user-based)
+	ReadMax    int
+	ReadWindow time.Duration
+
+	// SSE connections (user-based)
+	SSEMax    int
+	SSEWindow time.Duration
+
+	// Admin panel operations (user-based)
+	AdminMax    int
+	AdminWindow time.Duration
+
+	// Dev endpoints (IP-based)
+	DevMax    int
+	DevWindow time.Duration
+
+	// Global fallback (IP-based) — DoS protection
+	GlobalMax    int
+	GlobalWindow time.Duration
 }

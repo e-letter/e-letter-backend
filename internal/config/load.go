@@ -25,8 +25,6 @@ func LoadConfig() *Config {
 	bcryptCost := mustParseIntWithFallback("BCRYPT_COST", 12)
 	trustedProxies := parseTrustedProxies(getEnv("TRUSTED_PROXIES", "127.0.0.1"))
 	redisDB := mustParseIntWithFallback("REDIS_DB", 0)
-	maxLoginAttempts := mustParseIntWithFallback("RATE_LIMIT_MAX_ATTEMPTS", 5)
-	rateLimitWindow := mustParseDurationWithFallback("RATE_LIMIT_WINDOW", 5*time.Minute)
 
 	cfg := &Config{
 		App: AppConfig{
@@ -62,8 +60,51 @@ func LoadConfig() *Config {
 			DB:       redisDB,
 		},
 		RateLimit: RateLimitConfig{
-			MaxAttempts:    maxLoginAttempts,
-			WindowDuration: rateLimitWindow,
+			// Login (IP-based)
+			LoginMax:         mustParseIntWithFallback("RATE_LIMIT_LOGIN_MAX", 5),
+			LoginWindow:      mustParseDurationWithFallback("RATE_LIMIT_LOGIN_WINDOW", 5*time.Minute),
+			LoginAdminMax:    mustParseIntWithFallback("RATE_LIMIT_LOGIN_ADMIN_MAX", 3),
+			LoginAdminWindow: mustParseDurationWithFallback("RATE_LIMIT_LOGIN_ADMIN_WINDOW", 5*time.Minute),
+
+			// Registration (IP-based)
+			RegisterMax:    mustParseIntWithFallback("RATE_LIMIT_REGISTER_MAX", 3),
+			RegisterWindow: mustParseDurationWithFallback("RATE_LIMIT_REGISTER_WINDOW", 10*time.Minute),
+
+			// Password reset flow (IP-based)
+			ForgotPasswordMax:    mustParseIntWithFallback("RATE_LIMIT_FORGOT_PASSWORD_MAX", 3),
+			ForgotPasswordWindow: mustParseDurationWithFallback("RATE_LIMIT_FORGOT_PASSWORD_WINDOW", 15*time.Minute),
+			VerifyOTPMax:         mustParseIntWithFallback("RATE_LIMIT_VERIFY_OTP_MAX", 5),
+			VerifyOTPWindow:      mustParseDurationWithFallback("RATE_LIMIT_VERIFY_OTP_WINDOW", 10*time.Minute),
+			ResetPasswordMax:     mustParseIntWithFallback("RATE_LIMIT_RESET_PASSWORD_MAX", 3),
+			ResetPasswordWindow:  mustParseDurationWithFallback("RATE_LIMIT_RESET_PASSWORD_WINDOW", 15*time.Minute),
+
+			// Token refresh (IP-based)
+			RefreshMax:    mustParseIntWithFallback("RATE_LIMIT_REFRESH_MAX", 10),
+			RefreshWindow: mustParseDurationWithFallback("RATE_LIMIT_REFRESH_WINDOW", 5*time.Minute),
+
+			// Write operations (user-based)
+			WriteMax:    mustParseIntWithFallback("RATE_LIMIT_WRITE_MAX", 10),
+			WriteWindow: mustParseDurationWithFallback("RATE_LIMIT_WRITE_WINDOW", 1*time.Hour),
+
+			// Read/list operations (user-based)
+			ReadMax:    mustParseIntWithFallback("RATE_LIMIT_READ_MAX", 60),
+			ReadWindow: mustParseDurationWithFallback("RATE_LIMIT_READ_WINDOW", 1*time.Minute),
+
+			// SSE (user-based)
+			SSEMax:    mustParseIntWithFallback("RATE_LIMIT_SSE_MAX", 1),
+			SSEWindow: mustParseDurationWithFallback("RATE_LIMIT_SSE_WINDOW", 30*time.Second),
+
+			// Admin panel (user-based)
+			AdminMax:    mustParseIntWithFallback("RATE_LIMIT_ADMIN_MAX", 100),
+			AdminWindow: mustParseDurationWithFallback("RATE_LIMIT_ADMIN_WINDOW", 1*time.Minute),
+
+			// Dev endpoints (IP-based)
+			DevMax:    mustParseIntWithFallback("RATE_LIMIT_DEV_MAX", 10),
+			DevWindow: mustParseDurationWithFallback("RATE_LIMIT_DEV_WINDOW", 1*time.Minute),
+
+			// Global fallback (IP-based)
+			GlobalMax:    mustParseIntWithFallback("RATE_LIMIT_GLOBAL_MAX", 200),
+			GlobalWindow: mustParseDurationWithFallback("RATE_LIMIT_GLOBAL_WINDOW", 1*time.Minute),
 		},
 		Admin: AdminConfig{
 			Username: mustGetEnv("ADMIN_USERNAME"),

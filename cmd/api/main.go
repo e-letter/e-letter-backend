@@ -23,7 +23,7 @@ func main() {
 
 	db := config.NewMySQLDB(cfg)
 
-	rateLimiter := middleware.NewRedisRateLimiter(cfg)
+	rateLimiter := middleware.NewMultiRateLimiter(cfg)
 	defer rateLimiter.Close()
 
 	eventBus := handler.NewEventBus()

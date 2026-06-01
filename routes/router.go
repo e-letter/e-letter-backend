@@ -9,7 +9,7 @@ import (
 
 func SetupRouter(
 	cfg *config.Config,
-	rateLimiter *middleware.RedisRateLimiter,
+	rateLimiter *middleware.MultiRateLimiter,
 	authHandler *handler.AuthHandler,
 	userProfileHandler *handler.UserProfileHandler,
 	permissionHandler *handler.PermissionHandler,
@@ -30,6 +30,7 @@ func SetupRouter(
 		middleware.Logger(cfg.App.Env),
 		gin.Recovery(),
 		middleware.CORS(),
+		rateLimiter.GlobalRateLimit(),
 	)
 
 	r.Static("/uploads", "./public/uploads")
@@ -38,15 +39,15 @@ func SetupRouter(
 	api := r.Group("/api/v1")
 	{
 		// Public auth endpoints
-		api.POST("/register", authHandler.Register)
+		api.POST("/register", rateLimiter.RegisterRateLimiter(), authHandler.Register)
 		api.POST("/auth/login", rateLimiter.LoginRateLimiter(), authHandler.Login)
-		api.POST("/auth/admin-login", rateLimiter.LoginRateLimiter(), authHandler.AdminLogin)
-		api.POST("/auth/kepsek-login", rateLimiter.LoginRateLimiter(), authHandler.KepsekLogin)
+		api.POST("/auth/admin-login", rateLimiter.LoginAdminRateLimiter(), authHandler.AdminLogin)
+		api.POST("/auth/kepsek-login", rateLimiter.LoginAdminRateLimiter(), authHandler.KepsekLogin)
 		api.POST("/auth/logout", authHandler.Logout)
-		api.POST("/auth/refresh", authHandler.Refresh)
-		api.POST("/auth/forgot-password", authHandler.ForgotPassword)
-		api.POST("/auth/verify-otp", authHandler.VerifyOTP)
-		api.POST("/auth/reset-password", authHandler.ResetPassword)
+		api.POST("/auth/refresh", rateLimiter.RefreshRateLimiter(), authHandler.Refresh)
+		api.POST("/auth/forgot-password", rateLimiter.ForgotPasswordRateLimiter(), authHandler.ForgotPassword)
+		api.POST("/auth/verify-otp", rateLimiter.VerifyOTPRateLimiter(), authHandler.VerifyOTP)
+		api.POST("/auth/reset-password", rateLimiter.ResetPasswordRateLimiter(), authHandler.ResetPassword)
 		api.GET("/protected", authHandler.Protected)
 		api.POST("/protected", authHandler.Protected)
 		api.GET("/config/school", adminHandler.GetSchoolConfig)
@@ -56,75 +57,76 @@ func SetupRouter(
 		protected.Use(middleware.RequireAccessToken(cfg.JWT.Secret))
 		{
 			// User profile
-			protected.GET("/user/profile", userProfileHandler.GetProfile)
-			protected.POST("/user/profile", userProfileHandler.GetProfile)
-			protected.POST("/user/update", userProfileHandler.UpdateProfile)
-			protected.POST("/user/signature", userProfileHandler.UploadSignature)
-			protected.POST("/user/complete-onboarding", userProfileHandler.CompleteOnboarding)
+			protected.GET("/user/profile", rateLimiter.ReadRateLimiter(), userProfileHandler.GetProfile)
+			protected.POST("/user/profile", rateLimiter.ReadRateLimiter(), userProfileHandler.GetProfile)
+			protected.POST("/user/update", rateLimiter.WriteRateLimiter(), userProfileHandler.UpdateProfile)
+			protected.POST("/user/signature", rateLimiter.WriteRateLimiter(), userProfileHandler.UploadSignature)
+			protected.POST("/user/complete-onboarding", rateLimiter.WriteRateLimiter(), userProfileHandler.CompleteOnboarding)
 
 			// Permission requests
-			protected.GET("/permission-requests", permissionHandler.GetRequests)
-			protected.POST("/permission-requests", permissionHandler.CreateRequest)
-			protected.PUT("/permission-requests", permissionHandler.UpdateRequest)
-			protected.DELETE("/permission-requests", permissionHandler.DeleteRequest)
-			protected.POST("/permission-requests/:id/cancel", permissionHandler.CancelRequest)
-			protected.GET("/permission-requests/:id/detail", permissionHandler.GetRequestDetail)
-			protected.GET("/request-detail/:id", permissionHandler.GetRequestDetail)
-			protected.POST("/approve", permissionHandler.Approve)
+			protected.GET("/permission-requests", rateLimiter.ReadRateLimiter(), permissionHandler.GetRequests)
+			protected.POST("/permission-requests", rateLimiter.WriteRateLimiter(), permissionHandler.CreateRequest)
+			protected.PUT("/permission-requests", rateLimiter.WriteRateLimiter(), permissionHandler.UpdateRequest)
+			protected.DELETE("/permission-requests", rateLimiter.WriteRateLimiter(), permissionHandler.DeleteRequest)
+			protected.POST("/permission-requests/:id/cancel", rateLimiter.WriteRateLimiter(), permissionHandler.CancelRequest)
+			protected.GET("/permission-requests/:id/detail", rateLimiter.ReadRateLimiter(), permissionHandler.GetRequestDetail)
+			protected.GET("/request-detail/:id", rateLimiter.ReadRateLimiter(), permissionHandler.GetRequestDetail)
+			protected.POST("/approve", rateLimiter.WriteRateLimiter(), permissionHandler.Approve)
 
 			// Letters
-			protected.POST("/letters/student/create", letterHandler.CreateStudent)
-			protected.POST("/letters/teacher/create", letterHandler.CreateTeacher)
-			protected.POST("/letters/dispensasi", letterHandler.CreateTeacher)
+			protected.POST("/letters/student/create", rateLimiter.WriteRateLimiter(), letterHandler.CreateStudent)
+			protected.POST("/letters/teacher/create", rateLimiter.WriteRateLimiter(), letterHandler.CreateTeacher)
+			protected.POST("/letters/dispensasi", rateLimiter.WriteRateLimiter(), letterHandler.CreateTeacher)
 
-			protected.GET("/letters/student/izin-masuk", letterHandler.StudentIzinMasuk)
-			protected.GET("/letters/student/izin-keluar", letterHandler.StudentIzinKeluar)
-			protected.GET("/letters/student/dispensasi", letterHandler.StudentDispensasi)
-			protected.GET("/letters/teacher/izin-masuk", letterHandler.TeacherIzinMasuk)
-			protected.GET("/letters/teacher/izin-keluar", letterHandler.TeacherIzinKeluar)
-			protected.GET("/letters/teacher/dispensasi", letterHandler.TeacherDispensasi)
-			protected.GET("/letters/teacher/pending", letterHandler.TeacherPending)
-			protected.GET("/letters/teacher", letterHandler.TeacherLetters)
-			protected.GET("/letters/dispensasi", letterHandler.GeneralDispensasi)
-			protected.GET("/letters/general/dispensasi", letterHandler.GeneralDispensasi)
-			protected.GET("/letters/kepsek/pending", letterHandler.KepsekPending)
-			protected.GET("/letters/kepsek/stats", letterHandler.KepsekStats)
+			protected.GET("/letters/student/izin-masuk", rateLimiter.ReadRateLimiter(), letterHandler.StudentIzinMasuk)
+			protected.GET("/letters/student/izin-keluar", rateLimiter.ReadRateLimiter(), letterHandler.StudentIzinKeluar)
+			protected.GET("/letters/student/dispensasi", rateLimiter.ReadRateLimiter(), letterHandler.StudentDispensasi)
+			protected.GET("/letters/teacher/izin-masuk", rateLimiter.ReadRateLimiter(), letterHandler.TeacherIzinMasuk)
+			protected.GET("/letters/teacher/izin-keluar", rateLimiter.ReadRateLimiter(), letterHandler.TeacherIzinKeluar)
+			protected.GET("/letters/teacher/dispensasi", rateLimiter.ReadRateLimiter(), letterHandler.TeacherDispensasi)
+			protected.GET("/letters/teacher/pending", rateLimiter.ReadRateLimiter(), letterHandler.TeacherPending)
+			protected.GET("/letters/teacher", rateLimiter.ReadRateLimiter(), letterHandler.TeacherLetters)
+			protected.GET("/letters/dispensasi", rateLimiter.ReadRateLimiter(), letterHandler.GeneralDispensasi)
+			protected.GET("/letters/general/dispensasi", rateLimiter.ReadRateLimiter(), letterHandler.GeneralDispensasi)
+			protected.GET("/letters/kepsek/pending", rateLimiter.ReadRateLimiter(), letterHandler.KepsekPending)
+			protected.GET("/letters/kepsek/stats", rateLimiter.ReadRateLimiter(), letterHandler.KepsekStats)
 
 			// Attachments
-			protected.GET("/attachments/:id", attachmentHandler.GetByID)
-			protected.GET("/attachments/request/:requestId", attachmentHandler.ListByRequest)
-			protected.POST("/attachments/upload", attachmentHandler.Upload)
+			protected.GET("/attachments/:id", rateLimiter.ReadRateLimiter(), attachmentHandler.GetByID)
+			protected.GET("/attachments/request/:requestId", rateLimiter.ReadRateLimiter(), attachmentHandler.ListByRequest)
+			protected.POST("/attachments/upload", rateLimiter.WriteRateLimiter(), attachmentHandler.Upload)
 
 			// Master data
-			protected.GET("/classes", masterDataHandler.GetClasses)
-			protected.GET("/class/:id", masterDataHandler.GetClass)
-			protected.GET("/majors", masterDataHandler.GetMajors)
-			protected.GET("/major/:id", masterDataHandler.GetMajor)
-			protected.GET("/students", masterDataHandler.GetStudents)
-			protected.GET("/subjects", adminHandler.GetSubjects)
+			protected.GET("/classes", rateLimiter.ReadRateLimiter(), masterDataHandler.GetClasses)
+			protected.GET("/class/:id", rateLimiter.ReadRateLimiter(), masterDataHandler.GetClass)
+			protected.GET("/majors", rateLimiter.ReadRateLimiter(), masterDataHandler.GetMajors)
+			protected.GET("/major/:id", rateLimiter.ReadRateLimiter(), masterDataHandler.GetMajor)
+			protected.GET("/students", rateLimiter.ReadRateLimiter(), masterDataHandler.GetStudents)
+			protected.GET("/subjects", rateLimiter.ReadRateLimiter(), adminHandler.GetSubjects)
 
 			// Notifications
-			protected.GET("/notifications", notificationHandler.GetNotifications)
-			protected.PATCH("/notifications/:id/read", notificationHandler.MarkAsRead)
+			protected.GET("/notifications", rateLimiter.ReadRateLimiter(), notificationHandler.GetNotifications)
+			protected.PATCH("/notifications/:id/read", rateLimiter.WriteRateLimiter(), notificationHandler.MarkAsRead)
 
 			// SSE
-			protected.GET("/sse/events", sseHandler.Stream)
+			protected.GET("/sse/events", rateLimiter.SSERateLimiter(), sseHandler.Stream)
 
 			// Teacher-specific
 			teacher := protected.Group("/teacher")
 			teacher.Use(middleware.RequireRole("teacher"))
 			{
-				teacher.GET("/roles", permissionHandler.GetTeacherRoles)
-				teacher.POST("/roles/request", permissionHandler.RequestTeacherRole)
-				teacher.GET("/stats", letterHandler.TeacherStats)
-				teacher.POST("/delegate", permissionHandler.CreateDelegation)
-				teacher.GET("/delegates", permissionHandler.ListDelegations)
-				teacher.DELETE("/delegate/:id", permissionHandler.DeleteDelegation)
+				teacher.GET("/roles", rateLimiter.ReadRateLimiter(), permissionHandler.GetTeacherRoles)
+				teacher.POST("/roles/request", rateLimiter.WriteRateLimiter(), permissionHandler.RequestTeacherRole)
+				teacher.GET("/stats", rateLimiter.ReadRateLimiter(), letterHandler.TeacherStats)
+				teacher.POST("/delegate", rateLimiter.WriteRateLimiter(), permissionHandler.CreateDelegation)
+				teacher.GET("/delegates", rateLimiter.ReadRateLimiter(), permissionHandler.ListDelegations)
+				teacher.DELETE("/delegate/:id", rateLimiter.WriteRateLimiter(), permissionHandler.DeleteDelegation)
 			}
 
 			// Admin-specific
 			admin := protected.Group("/admin")
 			admin.Use(middleware.RequireRole("admin"))
+			admin.Use(rateLimiter.AdminRateLimiter())
 			{
 				admin.GET("/users", adminHandler.GetUsers)
 				admin.PATCH("/users/:id/status", adminHandler.UpdateUserStatus)
@@ -161,8 +163,8 @@ func SetupRouter(
 		}
 
 		// Dev endpoints
-		api.GET("/dev/registration-token", permissionHandler.ListRegistrationTokens)
-		api.POST("/dev/registration-token", permissionHandler.UpsertRegistrationToken)
+		api.GET("/dev/registration-token", rateLimiter.DevRateLimiter(), permissionHandler.ListRegistrationTokens)
+		api.POST("/dev/registration-token", rateLimiter.DevRateLimiter(), permissionHandler.UpsertRegistrationToken)
 	}
 
 	healthHandler := func(c *gin.Context) {
