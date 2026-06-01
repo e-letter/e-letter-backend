@@ -19,6 +19,18 @@ type letterRepository struct {
 	publisher  NotificationPublisher
 }
 
+// resolvedStep holds the resolved data for a single approval step before insertion.
+type resolvedStep struct {
+	StepNo              int
+	ApproverRole        string
+	ApproverTeacherID   *int64
+	ApproverPrincipalID *int64
+	Status              string
+	SignatureURL        *string
+	ScheduleID          *int64
+	Notes               *string
+}
+
 func NewLetterRepository(db *sql.DB, schoolCode string, publisher NotificationPublisher) LetterRepository {
 	return &letterRepository{db: db, schoolCode: schoolCode, publisher: publisher}
 }
@@ -49,14 +61,13 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 	}
 	requestID := int(id)
 
+	// Batch INSERT for request_students — single round trip instead of N.
 	if len(req.Students) > 0 {
-		for _, studentID := range req.Students {
-			if _, err := tx.Exec(`INSERT INTO request_students (request_id, student_id) VALUES (?, ?)`, requestID, studentID); err != nil {
-				return 0, err
-			}
+		if err := batchInsertRequestStudents(tx, requestID, req.Students); err != nil {
+			return 0, err
 		}
 	} else {
-		// Fallback: check if the requester has a student profile, and insert their student ID into request_students
+		// Fallback: check if the requester has a student profile, and insert their student ID.
 		var studentID int
 		err := tx.QueryRow(`SELECT id FROM student_profiles WHERE user_id = ?`, userID).Scan(&studentID)
 		if err == nil {
@@ -98,11 +109,31 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 	return requestID, nil
 }
 
+// batchInsertRequestStudents inserts all student IDs in a single multi-row INSERT.
+func batchInsertRequestStudents(tx *sql.Tx, requestID int, studentIDs []int) error {
+	if len(studentIDs) == 0 {
+		return nil
+	}
+	// Build multi-row VALUES clause: (?,?),(?,?),...
+	valueStrings := make([]string, 0, len(studentIDs))
+	valueArgs := make([]any, 0, len(studentIDs)*2)
+	for _, sid := range studentIDs {
+		valueStrings = append(valueStrings, "(?, ?)")
+		valueArgs = append(valueArgs, requestID, sid)
+	}
+	query := fmt.Sprintf("INSERT INTO request_students (request_id, student_id) VALUES %s", strings.Join(valueStrings, ","))
+	_, err := tx.Exec(query, valueArgs...)
+	return err
+}
+
 // createApprovalSteps reads flow templates, resolves approvers, inserts approval rows,
 // and sends a notification to the first pending approver. Returns the first pending step number.
+//
+// Optimization: all reference data (role assignments, schedules, profiles) is preloaded ONCE
+// before the template loop, eliminating N+1 query patterns. All queries use tx for transactional consistency.
 func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requestTypeID int, userID int, academicYearID int64) (int, *int64, error) {
-	// 1. Read flow templates
-	rows, err := r.db.Query(
+	// 1. Read flow templates (via tx, not r.db)
+	rows, err := tx.Query(
 		`SELECT step_no, approver_role, is_required, skip_if_no_schedule
 		 FROM approval_flow_templates WHERE request_type_id = ? ORDER BY step_no ASC`, requestTypeID)
 	if err != nil {
@@ -131,36 +162,83 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 		return 1, nil, nil
 	}
 
-	// 2. Gather student context
+	// 2. Gather student context (via tx)
 	var classID sql.NullInt64
-	r.db.QueryRow(
+	err = tx.QueryRow(
 		`SELECT sce.class_id FROM student_profiles sp
 		 JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
 		 WHERE sp.user_id = ? LIMIT 1`, userID).Scan(&classID)
+	if err != nil && err != sql.ErrNoRows {
+		return 1, nil, fmt.Errorf("resolve student class: %w", err)
+	}
 
 	var majorID sql.NullInt64
 	if classID.Valid {
-		r.db.QueryRow(`SELECT major_id FROM classes WHERE id = ?`, classID.Int64).Scan(&majorID)
+		err = tx.QueryRow(`SELECT major_id FROM classes WHERE id = ?`, classID.Int64).Scan(&majorID)
+		if err != nil && err != sql.ErrNoRows {
+			return 1, nil, fmt.Errorf("resolve major: %w", err)
+		}
 	}
 
 	var studentSig sql.NullString
-	r.db.QueryRow(`SELECT signature_url FROM student_profiles WHERE user_id = ?`, userID).Scan(&studentSig)
+	err = tx.QueryRow(`SELECT signature_url FROM student_profiles WHERE user_id = ?`, userID).Scan(&studentSig)
+	if err != nil && err != sql.ErrNoRows {
+		return 1, nil, fmt.Errorf("resolve student signature: %w", err)
+	}
+
+	// 3. Preload ALL reference data ONCE — eliminates N+1 inside the template loop.
+	//    These maps are keyed by the relevant ID for O(1) lookup.
+
+	// homeroomMap: classID -> teacherID (for wali_kelas resolution)
+	homeroomMap := make(map[int64]int64)
+	if classID.Valid {
+		var hid int64
+		if err := tx.QueryRow(
+			`SELECT teacher_id FROM class_homeroom_assignments
+			 WHERE class_id = ? AND academic_year_id = ? AND is_active = 1 LIMIT 1`,
+			classID.Int64, academicYearID).Scan(&hid); err == nil {
+			homeroomMap[classID.Int64] = hid
+		}
+	}
+
+	// kaproMap: majorID -> teacherID (for kapro resolution)
+	kaproMap := make(map[int64]int64)
+	if majorID.Valid {
+		var kid int64
+		if err := tx.QueryRow(
+			`SELECT teacher_id FROM major_head_assignments
+			 WHERE major_id = ? AND academic_year_id = ? AND is_active = 1 LIMIT 1`,
+			majorID.Int64, academicYearID).Scan(&kid); err == nil {
+			kaproMap[majorID.Int64] = kid
+		}
+	}
+
+	// tatibTeacherID: any active tatib teacher
+	var tatibTeacherID sql.NullInt64
+	{
+		var tid int64
+		if err := tx.QueryRow(
+			`SELECT teacher_id FROM teacher_roles WHERE role_name = 'tatib' AND status = 'active' LIMIT 1`,
+		).Scan(&tid); err == nil {
+			tatibTeacherID = sql.NullInt64{Int64: tid, Valid: true}
+		}
+	}
+
+	// kepsekPrincipalID: active principal
+	var kepsekPrincipalID sql.NullInt64
+	{
+		var pid int64
+		if err := tx.QueryRow(
+			`SELECT id FROM principal_profiles WHERE active = 1 AND deleted_at IS NULL LIMIT 1`,
+		).Scan(&pid); err == nil {
+			kepsekPrincipalID = sql.NullInt64{Int64: pid, Valid: true}
+		}
+	}
 
 	// Determine request_date for schedule lookup
 	requestDate := time.Now().Format("2006-01-02")
 
-	// 3. Resolve each step
-	type resolvedStep struct {
-		StepNo              int
-		ApproverRole        string
-		ApproverTeacherID   *int64
-		ApproverPrincipalID *int64
-		Status              string
-		SignatureURL        *string
-		ScheduleID          *int64
-		Notes               *string
-	}
-
+	// 4. Resolve each step using preloaded maps
 	var steps []resolvedStep
 	firstPendingStep := -1
 
@@ -182,18 +260,14 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 
 		case "wali_kelas":
 			if classID.Valid {
-				var tid int64
-				if err := r.db.QueryRow(
-					`SELECT teacher_id FROM class_homeroom_assignments
-					 WHERE class_id = ? AND academic_year_id = ? AND is_active = 1 LIMIT 1`,
-					classID.Int64, academicYearID).Scan(&tid); err == nil {
+				if tid, ok := homeroomMap[classID.Int64]; ok {
 					s.ApproverTeacherID = &tid
 				}
 			}
 
 		case "guru_mapel":
 			if classID.Valid {
-				tid, sid := r.findGuruMapelSchedule(classID.Int64, academicYearID, requestDate)
+				tid, sid := r.findGuruMapelSchedule(tx, classID.Int64, academicYearID, requestDate)
 				if t.SkipIfNoSchedule && tid == nil {
 					s.Status = "skipped"
 					note := "Auto-skip: tidak ada jadwal guru mapel yang overlap."
@@ -210,26 +284,20 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 
 		case "kapro":
 			if majorID.Valid {
-				var tid int64
-				if err := r.db.QueryRow(
-					`SELECT teacher_id FROM major_head_assignments
-					 WHERE major_id = ? AND academic_year_id = ? AND is_active = 1 LIMIT 1`,
-					majorID.Int64, academicYearID).Scan(&tid); err == nil {
+				if tid, ok := kaproMap[majorID.Int64]; ok {
 					s.ApproverTeacherID = &tid
 				}
 			}
 
 		case "tatib":
-			var tid int64
-			if err := r.db.QueryRow(
-				`SELECT teacher_id FROM teacher_roles WHERE role_name = 'tatib' AND status = 'active' LIMIT 1`).Scan(&tid); err == nil {
+			if tatibTeacherID.Valid {
+				tid := tatibTeacherID.Int64
 				s.ApproverTeacherID = &tid
 			}
 
 		case "kepala_sekolah":
-			var pid int64
-			if err := r.db.QueryRow(
-				`SELECT id FROM principal_profiles WHERE active = 1 AND deleted_at IS NULL LIMIT 1`).Scan(&pid); err == nil {
+			if kepsekPrincipalID.Valid {
+				pid := kepsekPrincipalID.Int64
 				s.ApproverPrincipalID = &pid
 			}
 		}
@@ -240,36 +308,25 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 		steps = append(steps, s)
 	}
 
-	// 4. Insert all approval rows
-	for _, s := range steps {
-		var actedAt interface{}
-		if s.Status == "approved" || s.Status == "skipped" {
-			actedAt = time.Now()
-		}
-		_, err := tx.Exec(
-			`INSERT INTO request_approvals
-			 (request_id, step_no, approver_role, approver_teacher_id, approver_principal_id, status, signature_url, schedule_id, acted_at, notes)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			requestID, s.StepNo, s.ApproverRole, s.ApproverTeacherID, s.ApproverPrincipalID,
-			s.Status, s.SignatureURL, s.ScheduleID, actedAt, s.Notes,
-		)
-		if err != nil {
-			return 1, nil, fmt.Errorf("insert approval step %d (%s): %w", s.StepNo, s.ApproverRole, err)
+	// 5. Batch INSERT all approval rows — single round trip instead of N.
+	if len(steps) > 0 {
+		if err := batchInsertApprovalSteps(tx, requestID, steps); err != nil {
+			return 1, nil, fmt.Errorf("batch insert approval steps: %w", err)
 		}
 	}
 
-	// 5. Notify first pending approver
+	// 6. Notify first pending approver
 	if firstPendingStep >= 0 {
 		for _, s := range steps {
 			if s.StepNo == firstPendingStep && s.Status == "pending" {
 				var approverUserID int64
 				var resolved bool
 				if s.ApproverTeacherID != nil {
-					if err := r.db.QueryRow(`SELECT user_id FROM teacher_profiles WHERE id = ?`, *s.ApproverTeacherID).Scan(&approverUserID); err == nil {
+					if err := tx.QueryRow(`SELECT user_id FROM teacher_profiles WHERE id = ?`, *s.ApproverTeacherID).Scan(&approverUserID); err == nil {
 						resolved = true
 					}
 				} else if s.ApproverPrincipalID != nil {
-					if err := r.db.QueryRow(`SELECT user_id FROM principal_profiles WHERE id = ?`, *s.ApproverPrincipalID).Scan(&approverUserID); err == nil {
+					if err := tx.QueryRow(`SELECT user_id FROM principal_profiles WHERE id = ?`, *s.ApproverPrincipalID).Scan(&approverUserID); err == nil {
 						resolved = true
 					}
 				}
@@ -291,8 +348,35 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 	return firstPendingStep, nil, nil
 }
 
+// batchInsertApprovalSteps inserts all resolved approval steps in a single multi-row INSERT.
+func batchInsertApprovalSteps(tx *sql.Tx, requestID int64, steps []resolvedStep) error {
+	if len(steps) == 0 {
+		return nil
+	}
+	valueStrings := make([]string, 0, len(steps))
+	valueArgs := make([]any, 0, len(steps)*10)
+	for _, s := range steps {
+		valueStrings = append(valueStrings, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		var actedAt any
+		if s.Status == "approved" || s.Status == "skipped" {
+			actedAt = time.Now()
+		}
+		valueArgs = append(valueArgs,
+			requestID, s.StepNo, s.ApproverRole, s.ApproverTeacherID, s.ApproverPrincipalID,
+			s.Status, s.SignatureURL, s.ScheduleID, actedAt, s.Notes,
+		)
+	}
+	query := fmt.Sprintf(
+		`INSERT INTO request_approvals
+		 (request_id, step_no, approver_role, approver_teacher_id, approver_principal_id, status, signature_url, schedule_id, acted_at, notes)
+		 VALUES %s`, strings.Join(valueStrings, ","))
+	_, err := tx.Exec(query, valueArgs...)
+	return err
+}
+
 // findGuruMapelSchedule finds a teacher with a schedule on the given date for the class.
-func (r *letterRepository) findGuruMapelSchedule(classID, academicYearID int64, requestDate string) (*int64, *int64) {
+// Uses tx for transactional consistency instead of r.db.
+func (r *letterRepository) findGuruMapelSchedule(tx *sql.Tx, classID, academicYearID int64, requestDate string) (*int64, *int64) {
 	t, err := time.Parse("2006-01-02", requestDate)
 	if err != nil {
 		return nil, nil
@@ -303,7 +387,7 @@ func (r *letterRepository) findGuruMapelSchedule(classID, academicYearID int64, 
 	}
 
 	var teacherID, scheduleID int64
-	err = r.db.QueryRow(
+	err = tx.QueryRow(
 		`SELECT teacher_id, id FROM schedules
 		 WHERE class_id = ? AND academic_year_id = ? AND day_of_week = ? AND is_active = 1
 		 LIMIT 1`, classID, academicYearID, day).Scan(&teacherID, &scheduleID)
@@ -353,6 +437,7 @@ func (r *letterRepository) ListLettersForUser(userID int, typeKey string, page, 
 		LEFT JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
 		LEFT JOIN classes c ON c.id = sce.class_id
 		WHERE r.requester_user_id = ? AND rt.code = ? AND r.deleted_at IS NULL
+		GROUP BY r.id
 		ORDER BY r.created_at DESC
 		LIMIT ? OFFSET ?
 	`, userID, typeKey, limit, offset)
@@ -401,6 +486,7 @@ func (r *letterRepository) ListLettersForTeacher(typeKey string, page, limit int
 		LEFT JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
 		LEFT JOIN classes c ON c.id = sce.class_id
 		WHERE rt.code = ? AND r.deleted_at IS NULL
+		GROUP BY r.id
 		ORDER BY r.created_at DESC
 		LIMIT ? OFFSET ?
 	`, typeKey, limit, offset)

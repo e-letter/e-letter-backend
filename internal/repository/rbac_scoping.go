@@ -7,56 +7,80 @@ import (
 )
 
 // BuildRBACScopeFilter generates a deny-by-default SQL condition for student scoping based on active teacher roles.
+// Consolidates the teacher_profile + teacher_roles lookup into a single query.
+// Integer values injected via fmt.Sprintf are sourced from the database (not user input), so this is SQL-safe.
 func BuildRBACScopeFilter(db *sql.DB, userID int) (string, error) {
-	var teacherID int64
-	err := db.QueryRow(`SELECT id FROM teacher_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL`, userID).Scan(&teacherID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			// No active teacher profile: deny all.
-			return "1=0", nil
-		}
-		return "", err
-	}
-
-	var academicYearID int64
-	err = db.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&academicYearID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			// No active academic year: deny all.
-			return "1=0", nil
-		}
-		return "", err
-	}
-
-	rows, err := db.Query(`SELECT role_name FROM teacher_roles WHERE teacher_id = ? AND status = 'active'`, teacherID)
+	// Single query: resolve teacher profile and active roles in one round trip.
+	rows, err := db.Query(`
+		SELECT tp.id AS teacher_id, tr.role_name
+		FROM teacher_profiles tp
+		JOIN teacher_roles tr ON tr.teacher_id = tp.id AND tr.status = 'active'
+		WHERE tp.user_id = ? AND tp.active = 1 AND tp.deleted_at IS NULL
+	`, userID)
 	if err != nil {
 		return "", err
 	}
 	defer rows.Close()
 
-	var conditions []string
-	hasActiveRole := false
-
+	type teacherRole struct {
+		teacherID int64
+		roleName  string
+	}
+	var roles []teacherRole
 	for rows.Next() {
-		var roleName string
-		if err := rows.Scan(&roleName); err != nil {
+		var r teacherRole
+		if err := rows.Scan(&r.teacherID, &r.roleName); err != nil {
 			return "", err
 		}
-		hasActiveRole = true
-		switch roleName {
-		case "tatib":
-			// Tatib has unrestricted access to all students/classes.
+		roles = append(roles, r)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+
+	if len(roles) == 0 {
+		return "1=0", nil
+	}
+
+	// Tatib short-circuit: unrestricted access, no further queries needed.
+	for _, r := range roles {
+		if r.roleName == "tatib" {
 			return "1=1", nil
-		case "wali_kelas":
-			conditions = append(conditions, fmt.Sprintf("sce.class_id IN (SELECT class_id FROM class_homeroom_assignments WHERE teacher_id = %d AND academic_year_id = %d AND is_active = 1)", teacherID, academicYearID))
-		case "guru_mapel":
-			conditions = append(conditions, fmt.Sprintf("sce.class_id IN (SELECT class_id FROM schedules WHERE teacher_id = %d AND academic_year_id = %d AND is_active = 1)", teacherID, academicYearID))
-		case "kapro":
-			conditions = append(conditions, fmt.Sprintf("sce.class_id IN (SELECT cl.id FROM classes cl JOIN major_head_assignments mha ON cl.major_id = mha.major_id WHERE mha.teacher_id = %d AND mha.academic_year_id = %d AND mha.is_active = 1 AND cl.is_active = 1)", teacherID, academicYearID))
 		}
 	}
 
-	if !hasActiveRole || len(conditions) == 0 {
+	// Resolve academic year (only needed for non-tatib roles).
+	var academicYearID int64
+	err = db.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&academicYearID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "1=0", nil
+		}
+		return "", err
+	}
+
+	// Build conditions for each role. Teacher IDs are int64 from the DB (not user input).
+	var conditions []string
+	for _, r := range roles {
+		tid := r.teacherID
+		yid := academicYearID
+		switch r.roleName {
+		case "wali_kelas":
+			conditions = append(conditions, fmt.Sprintf(
+				"sce.class_id IN (SELECT class_id FROM class_homeroom_assignments WHERE teacher_id = %d AND academic_year_id = %d AND is_active = 1)",
+				tid, yid))
+		case "guru_mapel":
+			conditions = append(conditions, fmt.Sprintf(
+				"sce.class_id IN (SELECT class_id FROM schedules WHERE teacher_id = %d AND academic_year_id = %d AND is_active = 1)",
+				tid, yid))
+		case "kapro":
+			conditions = append(conditions, fmt.Sprintf(
+				"sce.class_id IN (SELECT cl.id FROM classes cl JOIN major_head_assignments mha ON cl.major_id = mha.major_id WHERE mha.teacher_id = %d AND mha.academic_year_id = %d AND mha.is_active = 1 AND cl.is_active = 1)",
+				tid, yid))
+		}
+	}
+
+	if len(conditions) == 0 {
 		return "1=0", nil
 	}
 

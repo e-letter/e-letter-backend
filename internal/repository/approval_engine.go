@@ -22,23 +22,24 @@ import (
 //	Multi-role: if the approver holds multiple overlapping roles, Approve() cascades
 //	  auto-approvals across all steps they are authorised for.
 func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID int) (int64, int64, string, bool, int64, error) {
-	// 1. Resolve caller's internal profile IDs
+	// 1. Resolve caller's internal profile IDs — consolidate into a single query.
 	var callerTeacherID sql.NullInt64
-	_ = tx.QueryRow(
-		`SELECT id FROM teacher_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL`,
-		approverUserID,
-	).Scan(&callerTeacherID)
-
 	var callerPrincipalID sql.NullInt64
-	_ = tx.QueryRow(
-		`SELECT id FROM principal_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL`,
-		approverUserID,
-	).Scan(&callerPrincipalID)
+	err := tx.QueryRow(`
+		SELECT tp.id, pp.id
+		FROM users u
+		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id AND tp.active = 1 AND tp.deleted_at IS NULL
+		LEFT JOIN principal_profiles pp ON pp.user_id = u.id AND pp.active = 1 AND pp.deleted_at IS NULL
+		WHERE u.id = ? AND u.deleted_at IS NULL
+	`, approverUserID).Scan(&callerTeacherID, &callerPrincipalID)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, 0, "", false, 0, fmt.Errorf("resolve approver profiles: %w", err)
+	}
 
 	// 2. Check elapsed time since the request was submitted (use submitted_at for precision)
 	var elapsedMinutes int
 	var requestCode string
-	err := tx.QueryRow(`
+	err = tx.QueryRow(`
 		SELECT TIMESTAMPDIFF(MINUTE, r.submitted_at, NOW()), rt.code
 		FROM requests r
 		JOIN request_types rt ON rt.id = r.request_type_id
@@ -85,20 +86,26 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 			targetStep = &cp
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, "", false, 0, err
+	}
 
 	if targetStep == nil {
 		return 0, 0, "", false, 0, errors.New("approval step not found for this request")
 	}
 
-	// 4. Determine whether the caller is kapro (required for the bypass eligibility check)
+	// 4. Determine whether the caller is kapro (required for the bypass eligibility check).
+	//    Only query if bypass is even possible (late izin_keluar + caller has a teacher profile).
 	callerIsKapro := false
 	if isIzinKeluarLate && callerTeacherID.Valid {
-		_ = tx.QueryRow(`
+		if err := tx.QueryRow(`
 			SELECT EXISTS(
 				SELECT 1 FROM teacher_roles
 				WHERE teacher_id = ? AND role_name = 'kapro' AND status = 'active'
 			)
-		`, callerTeacherID.Int64).Scan(&callerIsKapro)
+		`, callerTeacherID.Int64).Scan(&callerIsKapro); err != nil {
+			return 0, 0, "", false, 0, fmt.Errorf("check kapro role: %w", err)
+		}
 	}
 
 	// bypassableRoles: roles that kapro may approve on behalf of after the 30-minute window.
@@ -147,7 +154,10 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 				SELECT 1 FROM teacher_roles
 				WHERE teacher_id = ? AND role_name = 'tatib' AND status = 'active'
 			)
-		`, callerTeacherID.Int64).Scan(&hasTatibRole); err != nil || !hasTatibRole {
+		`, callerTeacherID.Int64).Scan(&hasTatibRole); err != nil {
+			return 0, 0, "", false, 0, fmt.Errorf("check tatib role: %w", err)
+		}
+		if !hasTatibRole {
 			return 0, 0, "", false, 0, errors.New("Anda tidak memiliki peran aktif 'tatib' untuk menyetujui langkah ini.")
 		}
 
@@ -172,7 +182,10 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 				WHERE original_teacher_id = ? AND delegate_teacher_id = ? AND delegate_role = ?
 				  AND is_active = 1 AND valid_from <= CURRENT_DATE() AND valid_until >= CURRENT_DATE()
 			)
-		`, assignedTeacherID, callerTeacherID.Int64, targetStep.approverRole).Scan(&activeDelegationExists); err != nil || !activeDelegationExists {
+		`, assignedTeacherID, callerTeacherID.Int64, targetStep.approverRole).Scan(&activeDelegationExists); err != nil {
+			return 0, 0, "", false, 0, fmt.Errorf("check delegation: %w", err)
+		}
+		if !activeDelegationExists {
 			return 0, 0, "", false, 0, errors.New("Anda tidak berwenang menyetujui langkah ini (bukan guru yang ditugaskan atau delegasi aktif).")
 		}
 

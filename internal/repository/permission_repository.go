@@ -354,23 +354,26 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 
 	if isIzinKeluarLate && req.Status == "approved" {
 		// Check if the acting approver is kapro (bypass authority).
-		// Kapro is NOT a step in the flow; they approve on behalf of guru_mapel / wali_kelas.
-		// Once kapro acts on any bypassable step, auto-skip all remaining guru_mapel / wali_kelas
-		// steps that are still pending. Tatib is intentionally excluded — it must still approve.
-		var callerTeacherID sql.NullInt64
-		_ = tx.QueryRow(
+		var bypassTeacherID sql.NullInt64
+		err = tx.QueryRow(
 			`SELECT id FROM teacher_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL`,
 			approverID,
-		).Scan(&callerTeacherID)
+		).Scan(&bypassTeacherID)
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("resolve bypass teacher profile: %w", err)
+		}
 
-		if callerTeacherID.Valid {
+		if bypassTeacherID.Valid {
 			var isKapro bool
-			_ = tx.QueryRow(`
+			err = tx.QueryRow(`
 				SELECT EXISTS(
 					SELECT 1 FROM teacher_roles
 					WHERE teacher_id = ? AND role_name = 'kapro' AND status = 'active'
 				)
-			`, callerTeacherID.Int64).Scan(&isKapro)
+			`, bypassTeacherID.Int64).Scan(&isKapro)
+			if err != nil {
+				return fmt.Errorf("check kapro bypass role: %w", err)
+			}
 
 			if isKapro {
 				_, err = tx.Exec(`
@@ -392,7 +395,9 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 
 	// Multi-role cascade: check if the approver holds additional roles that can cover
 	// any remaining pending steps (e.g. a teacher who is both guru_mapel and tatib).
-	for {
+	// Capped at 10 iterations to prevent infinite loops under contention.
+	const maxCascadeIterations = 10
+	for i := 0; i < maxCascadeIterations; i++ {
 		rowsPending, err := tx.Query(`
 			SELECT step_no FROM request_approvals
 			WHERE request_id = ? AND status = 'pending' AND deleted_at IS NULL
@@ -628,29 +633,28 @@ func scanPermissionRequests(rows *sql.Rows) ([]domain.PermissionRequest, error) 
 }
 
 func (r *permissionRepository) CancelRequest(requestID, userID int, reason string) error {
-	// Verify ownership and status
-	var requesterID int
-	var status string
-	err := r.db.QueryRow(`SELECT requester_user_id, status FROM requests WHERE id = ?`, requestID).Scan(&requesterID, &status)
-	if err != nil {
-		return errors.New("Permintaan tidak ditemukan")
-	}
-	if requesterID != userID {
-		return errors.New("Anda tidak memiliki izin untuk membatalkan permintaan ini")
-	}
-	if status != "pending" {
-		return errors.New("Hanya permintaan dengan status pending yang dapat dibatalkan")
-	}
-
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
+	// Verify ownership and status atomically inside the transaction.
+	var requesterID int
+	var status string
 	var requestNumber string
-	if err := tx.QueryRow(`SELECT request_number FROM requests WHERE id = ?`, requestID).Scan(&requestNumber); err != nil {
+	err = tx.QueryRow(`SELECT requester_user_id, status, request_number FROM requests WHERE id = ?`, requestID).Scan(&requesterID, &status, &requestNumber)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return errors.New("Permintaan tidak ditemukan")
+		}
 		return err
+	}
+	if requesterID != userID {
+		return errors.New("Anda tidak memiliki izin untuk membatalkan permintaan ini")
+	}
+	if status != "pending" {
+		return errors.New("Hanya permintaan dengan status pending yang dapat dibatalkan")
 	}
 
 	_, err = tx.Exec(`UPDATE requests SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = ?, cancel_reason = ? WHERE id = ?`,
@@ -933,13 +937,19 @@ func (r *permissionRepository) ListDelegations(userID int) (any, error) {
 }
 
 func (r *permissionRepository) DeleteDelegation(id, userID int) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	var originalTeacherID int64
-	err := r.db.QueryRow(`SELECT id FROM teacher_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL`, userID).Scan(&originalTeacherID)
+	err = tx.QueryRow(`SELECT id FROM teacher_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL`, userID).Scan(&originalTeacherID)
 	if err != nil {
 		return fmt.Errorf("profil guru pemberi delegasi tidak aktif: %w", err)
 	}
 
-	res, err := r.db.Exec(`UPDATE request_approval_delegates SET is_active = 0 WHERE id = ? AND original_teacher_id = ?`, id, originalTeacherID)
+	res, err := tx.Exec(`UPDATE request_approval_delegates SET is_active = 0 WHERE id = ? AND original_teacher_id = ?`, id, originalTeacherID)
 	if err != nil {
 		return err
 	}
@@ -947,5 +957,5 @@ func (r *permissionRepository) DeleteDelegation(id, userID int) error {
 	if rows == 0 {
 		return errors.New("delegasi tidak ditemukan atau tidak berwenang menghapus")
 	}
-	return nil
+	return tx.Commit()
 }
