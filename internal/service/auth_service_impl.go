@@ -36,16 +36,30 @@ func (s *authService) Register(req domain.RegisterRequest) (int, string, error) 
 		return 0, "", errors.New("Bidang yang diperlukan hilang")
 	}
 
-	existing, err := s.repo.GetUserByEmail(req.Email)
+	roleLower := strings.ToLower(req.Role)
+	isTeacher := roleLower == "guru" || roleLower == "teacher"
+
+	// Enforce @smk.belajar.id domain for teacher accounts.
+	if isTeacher {
+		if !strings.HasSuffix(strings.ToLower(strings.TrimSpace(req.Email)), "@smk.belajar.id") {
+			return 0, "", errors.New("Pendaftaran guru hanya diizinkan menggunakan email @smk.belajar.id")
+		}
+	}
+
+	// Use status-agnostic lookup to prevent duplicate registrations from pending accounts.
+	existing, err := s.repo.GetUserByEmailAnyStatus(req.Email)
 	if err != nil {
 		return 0, "", fmt.Errorf("gagal memeriksa email: %w", err)
 	}
 	if existing != nil {
+		if existing.Status == "pending" {
+			return 0, "", errors.New("Email sudah terdaftar dan sedang menunggu persetujuan admin")
+		}
 		return 0, "", errors.New("Email sudah terdaftar")
 	}
 
 	roleID := 1
-	if req.Role == "guru" || req.Role == "teacher" {
+	if isTeacher {
 		roleID = 2
 	}
 
@@ -54,7 +68,14 @@ func (s *authService) Register(req domain.RegisterRequest) (int, string, error) 
 		return 0, "", err
 	}
 
-	userID, err := s.repo.CreateUser(roleID, req.Email, hash)
+	// Teachers are created as 'pending' — they cannot log in until an admin approves them.
+	// All other roles (student, etc.) are activated immediately.
+	initialStatus := "active"
+	if isTeacher {
+		initialStatus = "pending"
+	}
+
+	userID, err := s.repo.CreateUser(roleID, req.Email, hash, initialStatus)
 	if err != nil {
 		return 0, "", err
 	}
@@ -98,6 +119,14 @@ func (s *authService) Login(req domain.LoginRequest, ip, userAgent string) (*dom
 			UserAgent: userAgent,
 		})
 		return nil, "", "", errors.New("ID atau kata sandi tidak valid")
+	}
+
+	// GetUserByLoginIdentifiers only returns active users. If we get here from a pending-state
+	// user that somehow passed the active filter, block them. More importantly, this guard
+	// also handles any future code path that might call Login before the status is enforced
+	// at the repository level.
+	if user.Status == "pending" {
+		return nil, "", "", errors.New("Akun Anda sedang menunggu persetujuan admin. Silakan hubungi administrator sekolah.")
 	}
 
 	uid := user.ID

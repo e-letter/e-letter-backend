@@ -60,7 +60,10 @@ type ResetPasswordRequest struct {
 type AuthRepository interface {
 	GetUserByLoginIdentifiers(id string) (*User, error)
 	GetUserByEmail(email string) (*User, error)
-	CreateUser(roleID int, email, passwordHash string) (int, error)
+	// GetUserByEmailAnyStatus returns a user regardless of their status (active/pending/inactive).
+	// Used during registration to prevent duplicate email registrations even for pending accounts.
+	GetUserByEmailAnyStatus(email string) (*User, error)
+	CreateUser(roleID int, email, passwordHash, status string) (int, error)
 	UpdateUserProfile(userID int, fullName string, profileCompleted bool) error
 	GetUserByID(userID int) (*User, error)
 	GetRegistrationToken(token string) (*TokenRecord, error)

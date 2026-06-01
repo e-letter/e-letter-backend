@@ -107,14 +107,78 @@ func (r *authRepository) GetUserByEmail(email string) (*domain.User, error) {
 	return &user, nil
 }
 
-func (r *authRepository) CreateUser(roleID int, email, passwordHash string) (int, error) {
+// GetUserByEmailAnyStatus looks up a user by email regardless of their account status.
+// This is intentionally used during registration to block duplicate email registrations
+// even when an existing account is still in 'pending' state.
+func (r *authRepository) GetUserByEmailAnyStatus(email string) (*domain.User, error) {
+	query := `
+		SELECT u.id, u.username, u.email, u.role, u.status, u.password_hash,
+		       CASE WHEN u.role = 'teacher' THEN tp.full_name
+		            WHEN u.role = 'kepala_sekolah' THEN pp.full_name
+		            WHEN u.role = 'student' THEN sp.full_name
+		       END as full_name,
+		       CASE WHEN u.role = 'student' THEN sp.student_code ELSE NULL END as student_code,
+		       CASE WHEN u.role = 'teacher' THEN tp.employee_code
+		            WHEN u.role = 'kepala_sekolah' THEN pp.employee_code
+		            ELSE NULL
+		       END as employee_code,
+		       COALESCE(tp.gender, sp.gender, pp.gender, NULL) as gender,
+		       COALESCE(tp.phone, sp.phone, pp.phone, NULL) as phone_number,
+		       CASE WHEN u.role = 'student'
+		            THEN (SELECT class_id FROM student_class_enrollments sce WHERE sce.student_id = sp.id AND sce.is_active = 1 LIMIT 1)
+		            WHEN u.role = 'teacher'
+		            THEN (SELECT class_id FROM class_homeroom_assignments cha WHERE cha.teacher_id = tp.id AND cha.is_active = 1 LIMIT 1)
+		       END as class_id,
+		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN true ELSE false END as can_request_dispensasi,
+		       CASE WHEN u.role = 'teacher' THEN COALESCE(tp.active, 0)
+		            WHEN u.role = 'kepala_sekolah' THEN COALESCE(pp.active, 0)
+		            WHEN u.role = 'student' THEN COALESCE(sp.active, 0)
+		            ELSE false
+		       END as profile_completed,
+		       COALESCE(tp.created_at, sp.created_at, pp.created_at, u.created_at) as created_at,
+		       COALESCE(tp.updated_at, sp.updated_at, pp.updated_at, u.updated_at) as updated_at
+		FROM users u
+		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
+		LEFT JOIN student_profiles sp ON sp.user_id = u.id
+		LEFT JOIN principal_profiles pp ON pp.user_id = u.id
+		WHERE u.email = ? AND u.deleted_at IS NULL
+		LIMIT 1
+	`
+	var user domain.User
+	if err := r.db.QueryRow(query, email).Scan(
+		&user.ID,
+		&user.Username,
+		&user.Email,
+		&user.Role,
+		&user.Status,
+		&user.PasswordHash,
+		&user.FullName,
+		&user.StudentCode,
+		&user.EmployeeCode,
+		&user.Gender,
+		&user.PhoneNumber,
+		&user.ClassID,
+		&user.CanRequestDispensasi,
+		&user.ProfileCompleted,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *authRepository) CreateUser(roleID int, email, passwordHash, status string) (int, error) {
 	role := "student"
 	if roleID == 2 {
 		role = "teacher"
 	}
 	res, err := r.db.Exec(
-		`INSERT INTO users (email, password_hash, role, status) VALUES (?, ?, ?, 'active')`,
-		email, passwordHash, role,
+		`INSERT INTO users (email, password_hash, role, status) VALUES (?, ?, ?, ?)`,
+		email, passwordHash, role, status,
 	)
 	if err != nil {
 		return 0, err
