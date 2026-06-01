@@ -749,6 +749,12 @@ func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
 		return
 	}
 
+	// Sanitize configKey: reject path separators and ".." sequences for defense-in-depth
+	if strings.Contains(configKey, "/") || strings.Contains(configKey, "\\") || strings.Contains(configKey, "..") {
+		response.Error(c, http.StatusBadRequest, "config_key tidak valid")
+		return
+	}
+
 	file, err := c.FormFile("file")
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "File diperlukan")
@@ -779,16 +785,35 @@ func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
 		return
 	}
 
+	// Verify resolved paths stay within the upload directory
+	absUploadDir, err := filepath.Abs(uploadDir)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "Gagal memproses path")
+		return
+	}
+
 	// Clean up other extensions to prevent old file residue
 	extensions := []string{".png", ".jpg", ".jpeg"}
 	for _, e := range extensions {
 		if e != ext {
-			_ = os.Remove(filepath.Join(uploadDir, configKey+e))
+			candidatePath := filepath.Join(uploadDir, configKey+e)
+			absCandidate, err := filepath.Abs(candidatePath)
+			if err != nil || !strings.HasPrefix(absCandidate, absUploadDir) {
+				continue
+			}
+			_ = os.Remove(candidatePath)
 		}
 	}
 
 	filename := configKey + ext
 	dst := filepath.Join(uploadDir, filename)
+
+	// Verify the final destination path is within the upload directory
+	absDst, err := filepath.Abs(dst)
+	if err != nil || !strings.HasPrefix(absDst, absUploadDir) {
+		response.Error(c, http.StatusBadRequest, "Path file tidak valid")
+		return
+	}
 
 	if err := c.SaveUploadedFile(file, dst); err != nil {
 		response.Error(c, http.StatusInternalServerError, "Gagal menyimpan file")

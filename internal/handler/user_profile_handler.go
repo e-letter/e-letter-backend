@@ -101,6 +101,18 @@ func (h *UserProfileHandler) UploadSignature(c *gin.Context) {
 		return
 	}
 
+	// Validate role against allowlist to prevent path traversal
+	allowedRoles := map[string]bool{
+		"student":        true,
+		"teacher":        true,
+		"admin":          true,
+		"kepala_sekolah": true,
+	}
+	if !allowedRoles[req.Role] {
+		response.Error(c, http.StatusBadRequest, "Role tidak valid")
+		return
+	}
+
 	svgData := req.SignatureDataUrl
 	if strings.HasPrefix(svgData, "data:image/svg+xml;base64,") {
 		decoded, err := base64.StdEncoding.DecodeString(svgData[26:])
@@ -117,8 +129,21 @@ func (h *UserProfileHandler) UploadSignature(c *gin.Context) {
 		return
 	}
 
+	// Verify resolved path stays within the signatures directory
+	absSignaturesDir, err := filepath.Abs(signaturesDir)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "Gagal memproses path")
+		return
+	}
+
 	filename := fmt.Sprintf("%s_%d_ttd.svg", req.Role, userID)
 	filePath := filepath.Join(signaturesDir, filename)
+
+	absFilePath, err := filepath.Abs(filePath)
+	if err != nil || !strings.HasPrefix(absFilePath, absSignaturesDir) {
+		response.Error(c, http.StatusBadRequest, "Path file tidak valid")
+		return
+	}
 
 	if err := os.WriteFile(filePath, []byte(svgData), 0644); err != nil {
 		response.Error(c, http.StatusInternalServerError, "Gagal menyimpan tanda tangan")
