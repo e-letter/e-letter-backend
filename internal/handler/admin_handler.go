@@ -169,6 +169,50 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 	id := c.Param("id")
 	adminUserID := toIntFromContext(c, "userId")
 
+	idInt, err := strconv.Atoi(id)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "Invalid ID format")
+		return
+	}
+
+	if idInt < 0 {
+		userID := -idInt
+		tx, err := h.db.Begin()
+		if err != nil {
+			response.Error(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer tx.Rollback()
+
+		var status string
+		var role string
+		err = tx.QueryRow(`SELECT status, role FROM users WHERE id = ? FOR UPDATE`, userID).Scan(&status, &role)
+		if err != nil {
+			response.Error(c, http.StatusNotFound, "User tidak ditemukan")
+			return
+		}
+		if role != "teacher" || status != "pending" {
+			response.Error(c, http.StatusBadRequest, "User bukan guru pending")
+			return
+		}
+
+		if _, err := tx.Exec(`UPDATE users SET status = 'active', updated_at = NOW() WHERE id = ?`, userID); err != nil {
+			response.Error(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if _, err := tx.Exec(`UPDATE teacher_profiles SET active = 1, updated_at = NOW() WHERE user_id = ?`, userID); err != nil {
+			response.Error(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			response.Error(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Akun guru berhasil disetujui"})
+		return
+	}
+
 	tx, err := h.db.Begin()
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
@@ -327,8 +371,25 @@ func (h *AdminHandler) ListPendingTeacherRoles(c *gin.Context) {
 		LEFT JOIN classes c ON c.id = tr.homeroom_class_id
 		LEFT JOIN majors m ON m.id = tr.major_id
 		WHERE tr.status = ?
-		ORDER BY tr.created_at DESC
-	`, status)
+		UNION ALL
+		SELECT
+			-CAST(u.id AS SIGNED) AS id,
+			tp.id AS teacher_id,
+			u.id  AS teacher_user_id,
+			tp.full_name,
+			'registrasi' AS role_name,
+			u.status AS status,
+			NULL AS homeroom_class_id,
+			NULL AS class_name,
+			NULL AS major_id,
+			NULL AS major_name,
+			NULL AS subject_ids,
+			DATE_FORMAT(tp.created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at
+		FROM users u
+		JOIN teacher_profiles tp ON tp.user_id = u.id
+		WHERE u.role = 'teacher' AND u.status = ? AND u.deleted_at IS NULL
+		ORDER BY created_at DESC
+	`, status, status)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
@@ -395,11 +456,57 @@ func (h *AdminHandler) ListPendingTeacherRoles(c *gin.Context) {
 func (h *AdminHandler) RejectTeacherRole(c *gin.Context) {
 	id := c.Param("id")
 	adminUserID := toIntFromContext(c, "userId")
+
+	idInt, err := strconv.Atoi(id)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "Invalid ID format")
+		return
+	}
+
+	if idInt < 0 {
+		userID := -idInt
+		tx, err := h.db.Begin()
+		if err != nil {
+			response.Error(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer tx.Rollback()
+
+		var status string
+		var role string
+		err = tx.QueryRow(`SELECT status, role FROM users WHERE id = ? FOR UPDATE`, userID).Scan(&status, &role)
+		if err != nil {
+			response.Error(c, http.StatusNotFound, "User tidak ditemukan")
+			return
+		}
+		if role != "teacher" || status != "pending" {
+			response.Error(c, http.StatusBadRequest, "User bukan guru pending")
+			return
+		}
+
+		// Soft delete user and teacher profile
+		if _, err := tx.Exec(`UPDATE users SET deleted_at = NOW(), updated_at = NOW() WHERE id = ?`, userID); err != nil {
+			response.Error(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if _, err := tx.Exec(`UPDATE teacher_profiles SET deleted_at = NOW(), updated_at = NOW() WHERE user_id = ?`, userID); err != nil {
+			response.Error(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			response.Error(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Pendaftaran guru berhasil ditolak"})
+		return
+	}
+
 	var body struct {
 		Reason string `json:"reason"`
 	}
 	_ = c.ShouldBindJSON(&body) // reason is optional
-	_, err := h.db.Exec(
+	_, err = h.db.Exec(
 		`UPDATE teacher_roles SET status = 'rejected', verified_by = ?, verified_at = NOW(), updated_at = NOW() WHERE id = ?`,
 		adminUserID, id,
 	)

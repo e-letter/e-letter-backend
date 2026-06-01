@@ -39,10 +39,10 @@ func (s *authService) Register(req domain.RegisterRequest) (int, string, error) 
 	roleLower := strings.ToLower(req.Role)
 	isTeacher := roleLower == "guru" || roleLower == "teacher"
 
-	// Enforce @smk.belajar.id domain for teacher accounts.
+	// Enforce @guru.smk.belajar.id domain for teacher accounts.
 	if isTeacher {
-		if !strings.HasSuffix(strings.ToLower(strings.TrimSpace(req.Email)), "@smk.belajar.id") {
-			return 0, "", errors.New("Pendaftaran guru hanya diizinkan menggunakan email @smk.belajar.id")
+		if !strings.HasSuffix(strings.ToLower(strings.TrimSpace(req.Email)), "@guru.smk.belajar.id") {
+			return 0, "", errors.New("Pendaftaran guru hanya diizinkan menggunakan email @guru.smk.belajar.id")
 		}
 	}
 

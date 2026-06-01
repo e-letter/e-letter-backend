@@ -145,7 +145,7 @@ func (h *UserProfileHandler) UploadSignature(c *gin.Context) {
 		return
 	}
 
-	if err := os.WriteFile(filePath, []byte(svgData), 0644); err != nil {
+	if err := os.WriteFile(absFilePath, []byte(svgData), 0644); err != nil {
 		response.Error(c, http.StatusInternalServerError, "Gagal menyimpan tanda tangan")
 		return
 	}
