@@ -61,9 +61,21 @@ func (r *userProfileRepository) GetByUserID(userID int) (*domain.User, error) {
 		       END as class_id,
            CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN true ELSE false END as can_request_dispensasi,
            CASE WHEN u.role = 'admin' THEN true
-                WHEN u.role = 'teacher' THEN COALESCE(tp.active, 0)
-                WHEN u.role = 'kepala_sekolah' THEN COALESCE(pp.active, 0)
-                WHEN u.role = 'student' THEN COALESCE(sp.active, 0)
+                WHEN u.role = 'teacher' THEN
+                     CASE WHEN COALESCE(tp.active, 0) = 1
+                               AND tp.employee_code IS NOT NULL AND tp.employee_code != ''
+                               AND tp.signature_url IS NOT NULL AND tp.signature_url != ''
+                          THEN true ELSE false END
+                WHEN u.role = 'kepala_sekolah' THEN
+                     CASE WHEN COALESCE(pp.active, 0) = 1
+                               AND pp.employee_code IS NOT NULL AND pp.employee_code != ''
+                               AND pp.signature_url IS NOT NULL AND pp.signature_url != ''
+                          THEN true ELSE false END
+                WHEN u.role = 'student' THEN
+                     CASE WHEN COALESCE(sp.active, 0) = 1
+                               AND sp.student_code IS NOT NULL AND sp.student_code != ''
+                               AND sp.signature_url IS NOT NULL AND sp.signature_url != ''
+                          THEN true ELSE false END
                 ELSE false
            END as profile_completed,
            COALESCE(tp.created_at, sp.created_at, pp.created_at, u.created_at) as created_at,

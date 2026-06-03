@@ -2,12 +2,57 @@ package repository
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/Refliqx/backend-eletter/internal/domain"
 )
 
+func normalizeEmail(email string) []string {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if !strings.Contains(email, "@") {
+		return []string{email}
+	}
+	parts := strings.Split(email, "@")
+	prefix := parts[0]
+	if strings.HasSuffix(email, "@smkn2singosari.sch.id") {
+		return []string{
+			email,
+			prefix + "@guru.smk.belajar.id",
+			prefix + "@smk.belajar.id",
+		}
+	}
+	if strings.HasSuffix(email, "@guru.smk.belajar.id") {
+		return []string{
+			email,
+			prefix + "@smkn2singosari.sch.id",
+		}
+	}
+	if strings.HasSuffix(email, "@smk.belajar.id") {
+		return []string{
+			email,
+			prefix + "@smkn2singosari.sch.id",
+		}
+	}
+	return []string{email}
+}
+
 func (r *authRepository) GetUserByLoginIdentifiers(id string) (*domain.User, error) {
+	emails := normalizeEmail(id)
+	var email1, email2, email3 string
+	email1 = id
+	if len(emails) > 0 {
+		email1 = emails[0]
+	}
+	email2 = email1
+	if len(emails) > 1 {
+		email2 = emails[1]
+	}
+	email3 = email1
+	if len(emails) > 2 {
+		email3 = emails[2]
+	}
+
 	query := `
 		SELECT u.id, u.username, u.email, u.role, u.status, u.password_hash,
 		       CASE WHEN u.role = 'teacher' THEN tp.full_name
@@ -27,9 +72,21 @@ func (r *authRepository) GetUserByLoginIdentifiers(id string) (*domain.User, err
 		            THEN (SELECT class_id FROM class_homeroom_assignments cha WHERE cha.teacher_id = tp.id AND cha.is_active = 1 LIMIT 1)
 		       END as class_id,
 		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN true ELSE false END as can_request_dispensasi,
-		       CASE WHEN u.role = 'teacher' THEN COALESCE(tp.active, 0)
-		            WHEN u.role = 'kepala_sekolah' THEN COALESCE(pp.active, 0)
-		            WHEN u.role = 'student' THEN COALESCE(sp.active, 0)
+		       CASE WHEN u.role = 'teacher' THEN
+		                 CASE WHEN COALESCE(tp.active, 0) = 1
+		                           AND tp.employee_code IS NOT NULL AND tp.employee_code != ''
+		                           AND tp.signature_url IS NOT NULL AND tp.signature_url != ''
+		                      THEN true ELSE false END
+		            WHEN u.role = 'kepala_sekolah' THEN
+		                 CASE WHEN COALESCE(pp.active, 0) = 1
+		                           AND pp.employee_code IS NOT NULL AND pp.employee_code != ''
+		                           AND pp.signature_url IS NOT NULL AND pp.signature_url != ''
+		                      THEN true ELSE false END
+		            WHEN u.role = 'student' THEN
+		                 CASE WHEN COALESCE(sp.active, 0) = 1
+		                           AND sp.student_code IS NOT NULL AND sp.student_code != ''
+		                           AND sp.signature_url IS NOT NULL AND sp.signature_url != ''
+		                      THEN true ELSE false END
 		            ELSE false
 		       END as profile_completed,
 		       COALESCE(tp.created_at, sp.created_at, pp.created_at, u.created_at) as created_at,
@@ -38,15 +95,30 @@ func (r *authRepository) GetUserByLoginIdentifiers(id string) (*domain.User, err
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
 		LEFT JOIN principal_profiles pp ON pp.user_id = u.id
-		WHERE (u.username = ? OR u.email = ? OR sp.student_code = ? OR tp.employee_code = ? OR pp.employee_code = ?)
-		  AND u.status IN ('active', 'pending') AND u.deleted_at IS NULL
+		WHERE (u.username = ? OR u.email = ? OR u.email = ? OR u.email = ? OR sp.student_code = ? OR tp.employee_code = ? OR pp.employee_code = ?)
+		  AND u.status IN ('active', 'pending', 'inactive', 'blocked') AND u.deleted_at IS NULL
 		LIMIT 1
 	`
-	row := r.db.QueryRow(query, id, id, id, id, id)
+	row := r.db.QueryRow(query, id, email1, email2, email3, id, id, id)
 	return scanUser(row)
 }
 
 func (r *authRepository) GetUserByEmail(email string) (*domain.User, error) {
+	emails := normalizeEmail(email)
+	var email1, email2, email3 string
+	email1 = email
+	if len(emails) > 0 {
+		email1 = emails[0]
+	}
+	email2 = email1
+	if len(emails) > 1 {
+		email2 = emails[1]
+	}
+	email3 = email1
+	if len(emails) > 2 {
+		email3 = emails[2]
+	}
+
 	query := `
 		SELECT u.id, u.username, u.email, u.role, u.status, u.password_hash,
 		       CASE WHEN u.role = 'teacher' THEN tp.full_name
@@ -66,9 +138,21 @@ func (r *authRepository) GetUserByEmail(email string) (*domain.User, error) {
 		            THEN (SELECT class_id FROM class_homeroom_assignments cha WHERE cha.teacher_id = tp.id AND cha.is_active = 1 LIMIT 1)
 		       END as class_id,
 		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN true ELSE false END as can_request_dispensasi,
-		       CASE WHEN u.role = 'teacher' THEN COALESCE(tp.active, 0)
-		            WHEN u.role = 'kepala_sekolah' THEN COALESCE(pp.active, 0)
-		            WHEN u.role = 'student' THEN COALESCE(sp.active, 0)
+		       CASE WHEN u.role = 'teacher' THEN
+		                 CASE WHEN COALESCE(tp.active, 0) = 1
+		                           AND tp.employee_code IS NOT NULL AND tp.employee_code != ''
+		                           AND tp.signature_url IS NOT NULL AND tp.signature_url != ''
+		                      THEN true ELSE false END
+		            WHEN u.role = 'kepala_sekolah' THEN
+		                 CASE WHEN COALESCE(pp.active, 0) = 1
+		                           AND pp.employee_code IS NOT NULL AND pp.employee_code != ''
+		                           AND pp.signature_url IS NOT NULL AND pp.signature_url != ''
+		                      THEN true ELSE false END
+		            WHEN u.role = 'student' THEN
+		                 CASE WHEN COALESCE(sp.active, 0) = 1
+		                           AND sp.student_code IS NOT NULL AND sp.student_code != ''
+		                           AND sp.signature_url IS NOT NULL AND sp.signature_url != ''
+		                      THEN true ELSE false END
 		            ELSE false
 		       END as profile_completed,
 		       COALESCE(tp.created_at, sp.created_at, pp.created_at, u.created_at) as created_at,
@@ -77,11 +161,11 @@ func (r *authRepository) GetUserByEmail(email string) (*domain.User, error) {
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
 		LEFT JOIN principal_profiles pp ON pp.user_id = u.id
-		WHERE u.email = ? AND u.status = 'active' AND u.deleted_at IS NULL
+		WHERE (u.email = ? OR u.email = ? OR u.email = ?) AND u.status = 'active' AND u.deleted_at IS NULL
 		LIMIT 1
 	`
 	var user domain.User
-	if err := r.db.QueryRow(query, email).Scan(
+	if err := r.db.QueryRow(query, email1, email2, email3).Scan(
 		&user.ID,
 		&user.Username,
 		&user.Email,
@@ -111,6 +195,21 @@ func (r *authRepository) GetUserByEmail(email string) (*domain.User, error) {
 // This is intentionally used during registration to block duplicate email registrations
 // even when an existing account is still in 'pending' state.
 func (r *authRepository) GetUserByEmailAnyStatus(email string) (*domain.User, error) {
+	emails := normalizeEmail(email)
+	var email1, email2, email3 string
+	email1 = email
+	if len(emails) > 0 {
+		email1 = emails[0]
+	}
+	email2 = email1
+	if len(emails) > 1 {
+		email2 = emails[1]
+	}
+	email3 = email1
+	if len(emails) > 2 {
+		email3 = emails[2]
+	}
+
 	query := `
 		SELECT u.id, u.username, u.email, u.role, u.status, u.password_hash,
 		       CASE WHEN u.role = 'teacher' THEN tp.full_name
@@ -130,9 +229,21 @@ func (r *authRepository) GetUserByEmailAnyStatus(email string) (*domain.User, er
 		            THEN (SELECT class_id FROM class_homeroom_assignments cha WHERE cha.teacher_id = tp.id AND cha.is_active = 1 LIMIT 1)
 		       END as class_id,
 		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN true ELSE false END as can_request_dispensasi,
-		       CASE WHEN u.role = 'teacher' THEN COALESCE(tp.active, 0)
-		            WHEN u.role = 'kepala_sekolah' THEN COALESCE(pp.active, 0)
-		            WHEN u.role = 'student' THEN COALESCE(sp.active, 0)
+		       CASE WHEN u.role = 'teacher' THEN
+		                 CASE WHEN COALESCE(tp.active, 0) = 1
+		                           AND tp.employee_code IS NOT NULL AND tp.employee_code != ''
+		                           AND tp.signature_url IS NOT NULL AND tp.signature_url != ''
+		                      THEN true ELSE false END
+		            WHEN u.role = 'kepala_sekolah' THEN
+		                 CASE WHEN COALESCE(pp.active, 0) = 1
+		                           AND pp.employee_code IS NOT NULL AND pp.employee_code != ''
+		                           AND pp.signature_url IS NOT NULL AND pp.signature_url != ''
+		                      THEN true ELSE false END
+		            WHEN u.role = 'student' THEN
+		                 CASE WHEN COALESCE(sp.active, 0) = 1
+		                           AND sp.student_code IS NOT NULL AND sp.student_code != ''
+		                           AND sp.signature_url IS NOT NULL AND sp.signature_url != ''
+		                      THEN true ELSE false END
 		            ELSE false
 		       END as profile_completed,
 		       COALESCE(tp.created_at, sp.created_at, pp.created_at, u.created_at) as created_at,
@@ -141,11 +252,11 @@ func (r *authRepository) GetUserByEmailAnyStatus(email string) (*domain.User, er
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
 		LEFT JOIN principal_profiles pp ON pp.user_id = u.id
-		WHERE u.email = ? AND u.deleted_at IS NULL
+		WHERE (u.email = ? OR u.email = ? OR u.email = ?) AND u.deleted_at IS NULL
 		LIMIT 1
 	`
 	var user domain.User
-	if err := r.db.QueryRow(query, email).Scan(
+	if err := r.db.QueryRow(query, email1, email2, email3).Scan(
 		&user.ID,
 		&user.Username,
 		&user.Email,
@@ -236,9 +347,21 @@ func (r *authRepository) GetUserByID(userID int) (*domain.User, error) {
 		            THEN (SELECT class_id FROM class_homeroom_assignments cha WHERE cha.teacher_id = tp.id AND cha.is_active = 1 LIMIT 1)
 		       END as class_id,
 		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN true ELSE false END as can_request_dispensasi,
-		       CASE WHEN u.role = 'teacher' THEN COALESCE(tp.active, 0)
-		            WHEN u.role = 'kepala_sekolah' THEN COALESCE(pp.active, 0)
-		            WHEN u.role = 'student' THEN COALESCE(sp.active, 0)
+		       CASE WHEN u.role = 'teacher' THEN
+		                 CASE WHEN COALESCE(tp.active, 0) = 1
+		                           AND tp.employee_code IS NOT NULL AND tp.employee_code != ''
+		                           AND tp.signature_url IS NOT NULL AND tp.signature_url != ''
+		                      THEN true ELSE false END
+		            WHEN u.role = 'kepala_sekolah' THEN
+		                 CASE WHEN COALESCE(pp.active, 0) = 1
+		                           AND pp.employee_code IS NOT NULL AND pp.employee_code != ''
+		                           AND pp.signature_url IS NOT NULL AND pp.signature_url != ''
+		                      THEN true ELSE false END
+		            WHEN u.role = 'student' THEN
+		                 CASE WHEN COALESCE(sp.active, 0) = 1
+		                           AND sp.student_code IS NOT NULL AND sp.student_code != ''
+		                           AND sp.signature_url IS NOT NULL AND sp.signature_url != ''
+		                      THEN true ELSE false END
 		            ELSE false
 		       END as profile_completed,
 		       COALESCE(tp.created_at, sp.created_at, pp.created_at, u.created_at) as created_at,

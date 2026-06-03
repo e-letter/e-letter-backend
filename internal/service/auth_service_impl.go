@@ -121,9 +121,15 @@ func (s *authService) Login(req domain.LoginRequest, ip, userAgent string) (*dom
 		return nil, "", "", errors.New("ID atau kata sandi tidak valid")
 	}
 
-	// Handle pending users. If the user status is pending, block the login and return the specific error message.
+	// Handle pending, inactive, and blocked users.
 	if user.Status == "pending" {
 		return nil, "", "", errors.New("akun masih belum di aktivasi/disetujui oleh admin")
+	}
+	if user.Status == "inactive" {
+		return nil, "", "", errors.New("akun dinonaktifkan sementara atau pendaftaran ditolak oleh admin")
+	}
+	if user.Status == "blocked" {
+		return nil, "", "", errors.New("akun diblokir oleh admin")
 	}
 
 	uid := user.ID
@@ -262,14 +268,23 @@ func (s *authService) Refresh(refreshToken string) (string, string, error) {
 
 	subRoles := s.repo.GetTeacherSubRoles(claims.UserID)
 
+	// Re-read ProfileCompleted from DB so the refreshed token always reflects
+	// the current state (e.g. after the user completes onboarding).
+	var isProfileComplete bool
+	if freshUser, err := s.repo.GetUserByID(claims.UserID); err == nil && freshUser != nil {
+		isProfileComplete = freshUser.ProfileCompleted
+	} else {
+		isProfileComplete = claims.IsProfileComplete
+	}
+
 	// Generate new access token
-	newAccessToken, err := utils.GenerateTokenFull(s.jwtSecret, claims.UserID, claims.Email, claims.Role, claims.MainRole, subRoles, claims.IsProfileComplete, "access", s.accessExpiry)
+	newAccessToken, err := utils.GenerateTokenFull(s.jwtSecret, claims.UserID, claims.Email, claims.Role, claims.MainRole, subRoles, isProfileComplete, "access", s.accessExpiry)
 	if err != nil {
 		return "", "", err
 	}
 
 	// Generate new refresh token
-	newRefreshToken, err := utils.GenerateTokenFull(s.jwtSecret, claims.UserID, claims.Email, claims.Role, claims.MainRole, subRoles, claims.IsProfileComplete, "refresh", s.refreshExpiry)
+	newRefreshToken, err := utils.GenerateTokenFull(s.jwtSecret, claims.UserID, claims.Email, claims.Role, claims.MainRole, subRoles, isProfileComplete, "refresh", s.refreshExpiry)
 	if err != nil {
 		return "", "", err
 	}

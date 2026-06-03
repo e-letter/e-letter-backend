@@ -142,7 +142,10 @@ func (r *permissionRepository) GetUserByNISN(nisn string) (*domain.User, error) 
 		       sp.phone as phone_number,
 		       (SELECT sce.class_id FROM student_class_enrollments sce WHERE sce.student_id = sp.id AND sce.is_active = 1 LIMIT 1) as class_id,
 		       false as can_request_dispensasi,
-		       COALESCE(sp.active, 0) as profile_completed,
+		       CASE WHEN COALESCE(sp.active, 0) = 1
+		                 AND sp.student_code IS NOT NULL AND sp.student_code != ''
+		                 AND sp.signature_url IS NOT NULL AND sp.signature_url != ''
+		            THEN true ELSE false END as profile_completed,
 		       sp.created_at,
 		       sp.updated_at
 		FROM users u
@@ -155,28 +158,46 @@ func (r *permissionRepository) GetUserByNISN(nisn string) (*domain.User, error) 
 func (r *permissionRepository) GetUserByID(userID int) (*domain.User, error) {
 	row := r.db.QueryRow(`
 		SELECT u.id, u.username, u.email, u.role, u.status, u.password_hash,
-		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN tp.full_name
+		       CASE WHEN u.role = 'teacher' THEN tp.full_name
+		            WHEN u.role = 'kepala_sekolah' THEN pp.full_name
 		            WHEN u.role = 'student' THEN sp.full_name
 		       END as full_name,
 		       CASE WHEN u.role = 'student' THEN sp.student_code ELSE NULL END as student_code,
-		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN tp.employee_code ELSE NULL END as employee_code,
-		       COALESCE(tp.gender, sp.gender, NULL) as gender,
-		       COALESCE(tp.phone, sp.phone, NULL) as phone_number,
+		       CASE WHEN u.role = 'teacher' THEN tp.employee_code
+		            WHEN u.role = 'kepala_sekolah' THEN pp.employee_code
+		            ELSE NULL
+		       END as employee_code,
+		       COALESCE(tp.gender, sp.gender, pp.gender, NULL) as gender,
+		       COALESCE(tp.phone, sp.phone, pp.phone, NULL) as phone_number,
 		       CASE WHEN u.role = 'student'
 		            THEN (SELECT sce.class_id FROM student_class_enrollments sce
 		                  JOIN student_profiles sp2 ON sce.student_id = sp2.id
 		                  WHERE sp2.user_id = u.id AND sce.is_active = 1 LIMIT 1)
 		       END as class_id,
 		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN true ELSE false END as can_request_dispensasi,
-		       CASE WHEN u.role IN ('teacher','kepala_sekolah') THEN COALESCE(tp.active, 0)
-		            WHEN u.role = 'student' THEN COALESCE(sp.active, 0)
+		       CASE WHEN u.role = 'teacher' THEN
+		                 CASE WHEN COALESCE(tp.active, 0) = 1
+		                           AND tp.employee_code IS NOT NULL AND tp.employee_code != ''
+		                           AND tp.signature_url IS NOT NULL AND tp.signature_url != ''
+		                      THEN true ELSE false END
+		            WHEN u.role = 'kepala_sekolah' THEN
+		                 CASE WHEN COALESCE(pp.active, 0) = 1
+		                           AND pp.employee_code IS NOT NULL AND pp.employee_code != ''
+		                           AND pp.signature_url IS NOT NULL AND pp.signature_url != ''
+		                      THEN true ELSE false END
+		            WHEN u.role = 'student' THEN
+		                 CASE WHEN COALESCE(sp.active, 0) = 1
+		                           AND sp.student_code IS NOT NULL AND sp.student_code != ''
+		                           AND sp.signature_url IS NOT NULL AND sp.signature_url != ''
+		                      THEN true ELSE false END
 		            ELSE false
 		       END as profile_completed,
-		       COALESCE(tp.created_at, sp.created_at, u.created_at) as created_at,
-		       COALESCE(tp.updated_at, sp.updated_at, u.updated_at) as updated_at
+		       COALESCE(tp.created_at, sp.created_at, pp.created_at, u.created_at) as created_at,
+		       COALESCE(tp.updated_at, sp.updated_at, pp.updated_at, u.updated_at) as updated_at
 		FROM users u
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
+		LEFT JOIN principal_profiles pp ON pp.user_id = u.id
 		WHERE u.id = ? AND u.deleted_at IS NULL LIMIT 1`, userID)
 	return scanUser(row)
 }

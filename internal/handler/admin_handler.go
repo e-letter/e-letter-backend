@@ -484,12 +484,12 @@ func (h *AdminHandler) RejectTeacherRole(c *gin.Context) {
 			return
 		}
 
-		// Soft delete user and teacher profile
-		if _, err := tx.Exec(`UPDATE users SET deleted_at = NOW(), updated_at = NOW() WHERE id = ?`, userID); err != nil {
+		// Set status of user to 'inactive' (rejected registration) and de-activate teacher profile, WITHOUT soft deleting
+		if _, err := tx.Exec(`UPDATE users SET status = 'inactive', updated_at = NOW() WHERE id = ?`, userID); err != nil {
 			response.Error(c, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if _, err := tx.Exec(`UPDATE teacher_profiles SET deleted_at = NOW(), updated_at = NOW() WHERE user_id = ?`, userID); err != nil {
+		if _, err := tx.Exec(`UPDATE teacher_profiles SET active = 0, updated_at = NOW() WHERE user_id = ?`, userID); err != nil {
 			response.Error(c, http.StatusInternalServerError, err.Error())
 			return
 		}
