@@ -713,8 +713,8 @@ func (r *permissionRepository) CancelRequest(requestID, userID int, reason strin
 	if requesterID != userID {
 		return errors.New("Anda tidak memiliki izin untuk membatalkan permintaan ini")
 	}
-	if status != "pending" {
-		return errors.New("Hanya permintaan dengan status pending yang dapat dibatalkan")
+	if status != "pending" && status != "approved" {
+		return errors.New("Hanya permintaan dengan status pending atau disetujui yang dapat dibatalkan")
 	}
 
 	_, err = tx.Exec(`UPDATE requests SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = ?, cancel_reason = ? WHERE id = ?`,
