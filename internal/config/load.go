@@ -30,6 +30,7 @@ func LoadConfig() *Config {
 		App: AppConfig{
 			Env:            getEnv("APP_ENV", "development"),
 			Port:           mustGetEnv("APP_PORT"),
+			BaseURL:        getEnv("APP_BASE_URL", "http://localhost:8080"),
 			Timezone:       getEnv("APP_TIMEZONE", "Asia/Jakarta"),
 			SchoolCode:     getEnv("SCHOOL_CODE", "SMKN2SGS"),
 			TrustedProxies: trustedProxies,

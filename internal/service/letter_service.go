@@ -18,11 +18,12 @@ type LetterService interface {
 }
 
 type letterService struct {
-	repo repository.LetterRepository
+	repo    repository.LetterRepository
+	baseURL string
 }
 
-func NewLetterService(repo repository.LetterRepository) LetterService {
-	return &letterService{repo: repo}
+func NewLetterService(repo repository.LetterRepository, baseURL string) LetterService {
+	return &letterService{repo: repo, baseURL: baseURL}
 }
 
 func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int, error) {
@@ -30,15 +31,15 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 		return 0, errors.New("type_id, request_date, start_time, dan end_time diperlukan")
 	}
 
-	if req.SignatureURL != nil && strings.HasPrefix(*req.SignatureURL, "data:image/svg+xml;base64,") {
-		encoded := strings.TrimPrefix(*req.SignatureURL, "data:image/svg+xml;base64,")
+	if req.SignatureURL != nil && strings.HasPrefix(*req.SignatureURL, "data:image/png;base64,") {
+		encoded := strings.TrimPrefix(*req.SignatureURL, "data:image/png;base64,")
 		decoded, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			return 0, fmt.Errorf("failed to decode signature: %w", err)
 		}
 
 		// Generate a unique filename for the letter signature (student role assumed for letter creation)
-		filename := fmt.Sprintf("student_%d_%d.svg", userID, time.Now().UnixNano())
+		filename := fmt.Sprintf("student_%d_%d.png", userID, time.Now().UnixNano())
 		filePath := filepath.Join("public", "uploads", "signatures", filename)
 
 		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
@@ -49,8 +50,8 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 			return 0, fmt.Errorf("failed to save signature file: %w", err)
 		}
 
-		// Store signature URL using the storage domain.
-		signatureURL := fmt.Sprintf("https://storage.smkn2singosari.sch.id/signatures/%s", filename)
+		// Store signature URL using the configured base URL.
+		signatureURL := strings.TrimRight(s.baseURL, "/") + "/signatures/" + filename
 		req.SignatureURL = &signatureURL
 	}
 

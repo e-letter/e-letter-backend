@@ -48,19 +48,21 @@ func (m *mockPermissionService) Approve(req domain.ApprovalRequest, approverID i
 	}
 	return nil
 }
-func (m *mockPermissionService) ListRegistrationTokens() ([]domain.TokenRecord, error) { return nil, nil }
+func (m *mockPermissionService) ListRegistrationTokens() ([]domain.TokenRecord, error) {
+	return nil, nil
+}
 func (m *mockPermissionService) UpsertRegistrationToken(_ string, _ int, _ *int, _ *time.Time) (*domain.TokenRecord, error) {
 	return nil, nil
 }
-func (m *mockPermissionService) CancelRequest(_, _ int, _ string) error              { return nil }
-func (m *mockPermissionService) GetRequestDetail(_ int) (any, error)                 { return nil, nil }
-func (m *mockPermissionService) GetTeacherRoles(_ int) (any, error)                  { return nil, nil }
+func (m *mockPermissionService) CancelRequest(_, _ int, _ string) error { return nil }
+func (m *mockPermissionService) GetRequestDetail(_ int) (any, error)    { return nil, nil }
+func (m *mockPermissionService) GetTeacherRoles(_ int) (any, error)     { return nil, nil }
 func (m *mockPermissionService) RequestTeacherRole(_ int, _ string, _ domain.TeacherRoleMetadata) error {
 	return nil
 }
 func (m *mockPermissionService) CreateDelegation(_, _ int, _, _, _ string) error { return nil }
-func (m *mockPermissionService) ListDelegations(_ int) (any, error)               { return nil, nil }
-func (m *mockPermissionService) DeleteDelegation(_, _ int) error                  { return nil }
+func (m *mockPermissionService) ListDelegations(_ int) (any, error)              { return nil, nil }
+func (m *mockPermissionService) DeleteDelegation(_, _ int) error                 { return nil }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test helpers

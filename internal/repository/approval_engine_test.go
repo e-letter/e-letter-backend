@@ -180,7 +180,6 @@ func TestKaproBypass_SkipsGuruMapelStep(t *testing.T) {
 		assert.False(t, isDelegated, "kapro bypass returns isDelegated=false by design")
 	}
 
-
 	_ = tx.Rollback()
 }
 
@@ -190,9 +189,9 @@ func TestTatibAlwaysMandatory(t *testing.T) {
 	_, mock, tx := newMockTx(t)
 
 	const (
-		approverUserID = 8  // kapro
+		approverUserID = 8 // kapro
 		requestID      = 30
-		stepNo         = 2  // tatib — should NOT be bypassable
+		stepNo         = 2 // tatib — should NOT be bypassable
 	)
 
 	mock.ExpectQuery(`SELECT tp\.id, pp\.id`).

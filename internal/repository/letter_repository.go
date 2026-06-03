@@ -644,7 +644,6 @@ func (r *letterRepository) populateStudentsForLetters(items []domain.LetterListI
 	return nil
 }
 
-
 func resolveRequestDate(requestDate string, startTime string, endTime string) string {
 	trimmed := strings.TrimSpace(requestDate)
 	if trimmed != "" {

@@ -26,6 +26,7 @@ type KepsekConfig struct {
 type AppConfig struct {
 	Env            string
 	Port           string
+	BaseURL        string   // Public base URL of the backend, e.g. https://api.example.com
 	Timezone       string
 	SchoolCode     string
 	TrustedProxies []string // List of trusted proxy IPs

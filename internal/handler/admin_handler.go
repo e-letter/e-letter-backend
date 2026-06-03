@@ -850,6 +850,8 @@ func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
 		"illustration_login_blue":   true,
 		"illustration_register":     true,
 		"bg_landing":                true,
+		"app_logo":                  true,
+		"school_logo":               true,
 	}
 	if !allowedKeys[configKey] {
 		response.Error(c, http.StatusBadRequest, "config_key tidak valid")
@@ -868,15 +870,15 @@ func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
 		return
 	}
 
-	// Limit 2MB
-	if file.Size > 2*1024*1024 {
-		response.Error(c, http.StatusBadRequest, "Ukuran file maksimal 2MB")
+	// Limit 5MB
+	if file.Size > 5*1024*1024 {
+		response.Error(c, http.StatusBadRequest, "Ukuran file maksimal 5MB")
 		return
 	}
 
 	ext := strings.ToLower(filepath.Ext(file.Filename))
-	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
-		response.Error(c, http.StatusBadRequest, "Format file tidak didukung (hanya PNG, JPG, JPEG)")
+	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".svg" {
+		response.Error(c, http.StatusBadRequest, "Format file tidak didukung (hanya PNG, JPG, JPEG, SVG)")
 		return
 	}
 
@@ -900,7 +902,7 @@ func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
 	}
 
 	// Clean up other extensions to prevent old file residue
-	extensions := []string{".png", ".jpg", ".jpeg"}
+	extensions := []string{".png", ".jpg", ".jpeg", ".svg"}
 	for _, e := range extensions {
 		if e != ext {
 			candidatePath := filepath.Join(uploadDir, configKey+e)

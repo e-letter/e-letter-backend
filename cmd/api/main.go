@@ -36,14 +36,14 @@ func main() {
 
 	userProfileRepo := repository.NewUserProfileRepository(db)
 	userProfileService := service.NewUserProfileService(userProfileRepo)
-	userProfileHandler := handler.NewUserProfileHandler(userProfileService)
+	userProfileHandler := handler.NewUserProfileHandler(userProfileService, cfg.App.BaseURL)
 
 	permissionRepo := repository.NewPermissionRepository(db, cfg.App.SchoolCode, eventBus)
 	permissionService := service.NewPermissionService(permissionRepo)
 	permissionHandler := handler.NewPermissionHandler(permissionService, cfg.App.Env != "production")
 
 	letterRepo := repository.NewLetterRepository(db, cfg.App.SchoolCode, eventBus)
-	letterService := service.NewLetterService(letterRepo)
+	letterService := service.NewLetterService(letterRepo, cfg.App.BaseURL)
 	letterHandler := handler.NewLetterHandler(letterService, db)
 
 	attachmentRepo := repository.NewAttachmentRepository(db)

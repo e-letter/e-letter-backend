@@ -16,10 +16,11 @@ import (
 
 type UserProfileHandler struct {
 	service service.UserProfileService
+	baseURL string
 }
 
-func NewUserProfileHandler(s service.UserProfileService) *UserProfileHandler {
-	return &UserProfileHandler{service: s}
+func NewUserProfileHandler(s service.UserProfileService, baseURL string) *UserProfileHandler {
+	return &UserProfileHandler{service: s, baseURL: baseURL}
 }
 
 func (h *UserProfileHandler) GetProfile(c *gin.Context) {
@@ -92,8 +93,8 @@ func (h *UserProfileHandler) UploadSignature(c *gin.Context) {
 		return
 	}
 
-	if req.SignatureDataUrl == "" || !strings.HasPrefix(req.SignatureDataUrl, "<svg") {
-		response.Error(c, http.StatusBadRequest, "Format tanda tangan harus SVG (dimulai dengan <svg)")
+	if req.SignatureDataUrl == "" || !strings.HasPrefix(req.SignatureDataUrl, "data:image/png;base64,") {
+		response.Error(c, http.StatusBadRequest, "Format tanda tangan harus PNG base64 (dimulai dengan data:image/png;base64,)")
 		return
 	}
 	if req.Role == "" {
@@ -113,14 +114,11 @@ func (h *UserProfileHandler) UploadSignature(c *gin.Context) {
 		return
 	}
 
-	svgData := req.SignatureDataUrl
-	if strings.HasPrefix(svgData, "data:image/svg+xml;base64,") {
-		decoded, err := base64.StdEncoding.DecodeString(svgData[26:])
-		if err != nil {
-			response.Error(c, http.StatusBadRequest, "Gagal mendecode tanda tangan")
-			return
-		}
-		svgData = string(decoded)
+	pngData := req.SignatureDataUrl
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(pngData, "data:image/png;base64,"))
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "Gagal mendecode tanda tangan")
+		return
 	}
 
 	signaturesDir := "./public/uploads/signatures"
@@ -136,7 +134,7 @@ func (h *UserProfileHandler) UploadSignature(c *gin.Context) {
 		return
 	}
 
-	filename := fmt.Sprintf("%s_%d_ttd.svg", req.Role, userID)
+	filename := fmt.Sprintf("%s_%d_ttd.png", req.Role, userID)
 	filePath := filepath.Join(signaturesDir, filename)
 
 	absFilePath, err := filepath.Abs(filePath)
@@ -145,13 +143,13 @@ func (h *UserProfileHandler) UploadSignature(c *gin.Context) {
 		return
 	}
 
-	if err := os.WriteFile(absFilePath, []byte(svgData), 0644); err != nil {
+	if err := os.WriteFile(absFilePath, decoded, 0644); err != nil {
 		response.Error(c, http.StatusInternalServerError, "Gagal menyimpan tanda tangan")
 		return
 	}
 
-	// Store signature URL using the storage domain.
-	signatureURL := "https://storage.smkn2singosari.sch.id/signatures/" + filename
+	// Build the public URL for this signature file.
+	signatureURL := strings.TrimRight(h.baseURL, "/") + "/signatures/" + filename
 	response.Success(c, http.StatusOK, "Tanda tangan berhasil disimpan", gin.H{"signature_url": signatureURL})
 }
 
