@@ -11,6 +11,7 @@ type Config struct {
 	RateLimit RateLimitConfig
 	Admin     AdminConfig
 	Kepsek    KepsekConfig
+	Email     EmailConfig
 }
 
 type AdminConfig struct {
@@ -21,6 +22,14 @@ type AdminConfig struct {
 type KepsekConfig struct {
 	Username string
 	Password string
+}
+
+// EmailConfig holds SMTP credentials used for sending OTP emails.
+type EmailConfig struct {
+	Host     string // SMTP server host, e.g. smtp.gmail.com
+	Port     string // SMTP server port, e.g. 587
+	Sender   string // From address (EMAIL_SENDER)
+	Password string // SMTP password or app-password (EMAIL_PASSWORD)
 }
 
 type AppConfig struct {

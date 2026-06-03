@@ -6,6 +6,7 @@ import (
 
 	"github.com/Refliqx/backend-eletter/internal/config"
 	"github.com/Refliqx/backend-eletter/internal/handler"
+	"github.com/Refliqx/backend-eletter/internal/mailer"
 	"github.com/Refliqx/backend-eletter/internal/middleware"
 	"github.com/Refliqx/backend-eletter/internal/repository"
 	"github.com/Refliqx/backend-eletter/internal/service"
@@ -31,7 +32,15 @@ func main() {
 
 	authRepo := repository.NewAuthRepository(db)
 	notificationRepo := repository.NewNotificationRepository(db)
-	authService := service.NewAuthService(authRepo, notificationRepo, cfg.JWT.Secret, cfg.JWT.AccessExpiresIn, cfg.JWT.RefreshExpiresIn)
+
+	emailMailer := mailer.New(mailer.Config{
+		Host:     cfg.Email.Host,
+		Port:     cfg.Email.Port,
+		Sender:   cfg.Email.Sender,
+		Password: cfg.Email.Password,
+	})
+
+	authService := service.NewAuthService(authRepo, notificationRepo, emailMailer, cfg.JWT.Secret, cfg.JWT.AccessExpiresIn, cfg.JWT.RefreshExpiresIn)
 	authHandler := handler.NewAuthHandler(authService, cfg, rateLimiter)
 
 	userProfileRepo := repository.NewUserProfileRepository(db)

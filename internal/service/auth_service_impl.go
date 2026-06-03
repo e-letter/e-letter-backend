@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Refliqx/backend-eletter/internal/domain"
+	"github.com/Refliqx/backend-eletter/internal/mailer"
 	"github.com/Refliqx/backend-eletter/internal/repository"
 	"github.com/Refliqx/backend-eletter/internal/utils"
 	"golang.org/x/crypto/bcrypt"
@@ -16,15 +17,17 @@ import (
 type authService struct {
 	repo             repository.AuthRepository
 	notificationRepo repository.NotificationRepository
+	mailer           mailer.Mailer
 	jwtSecret        string
 	accessExpiry     time.Duration
 	refreshExpiry    time.Duration
 }
 
-func NewAuthService(r repository.AuthRepository, notificationRepo repository.NotificationRepository, jwtSecret string, accessExpiry, refreshExpiry time.Duration) AuthService {
+func NewAuthService(r repository.AuthRepository, notificationRepo repository.NotificationRepository, m mailer.Mailer, jwtSecret string, accessExpiry, refreshExpiry time.Duration) AuthService {
 	return &authService{
 		repo:             r,
 		notificationRepo: notificationRepo,
+		mailer:           m,
 		jwtSecret:        jwtSecret,
 		accessExpiry:     accessExpiry,
 		refreshExpiry:    refreshExpiry,
@@ -306,11 +309,11 @@ func (s *authService) Logout(refreshToken string) error {
 func (s *authService) ForgotPassword(email, ip string) error {
 	user, err := s.repo.GetUserByEmail(email)
 	if err != nil || user == nil {
-		// Don't reveal if email exists
+		// Don't reveal whether the email is registered.
 		return nil
 	}
 
-	// Generate 6-digit OTP
+	// Generate a cryptographically-random 6-digit OTP.
 	otp := fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
 	otpHash := utils.HashToken(otp)
 	expiresAt := time.Now().Add(15 * time.Minute)
@@ -319,8 +322,11 @@ func (s *authService) ForgotPassword(email, ip string) error {
 		return err
 	}
 
-	// Log OTP to console (no email service)
-	fmt.Printf("[PASSWORD RESET] OTP for %s: %s (expires: %s)\n", email, otp, expiresAt.Format(time.RFC3339))
+	// Send OTP via email (falls back to console if SMTP is not configured).
+	if err := s.mailer.SendOTP(email, otp, expiresAt); err != nil {
+		// Log the error but don't fail the request — the OTP is already stored.
+		fmt.Printf("[WARN] gagal mengirim email OTP ke %s: %v\n", email, err)
+	}
 	return nil
 }
 

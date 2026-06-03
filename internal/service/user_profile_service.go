@@ -40,3 +40,7 @@ func (s *userProfileService) CompleteTeacherOnboarding(payload domain.CompleteTe
 	}
 	return s.repo.CompleteTeacherOnboarding(payload)
 }
+
+func (s *userProfileService) GetSchedules(userID int) ([]domain.ScheduleDetail, error) {
+	return s.repo.GetSchedules(userID)
+}

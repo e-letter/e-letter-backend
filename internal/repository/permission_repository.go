@@ -831,7 +831,7 @@ func (r *permissionRepository) GetRequestDetail(requestID int) (any, error) {
 
 func (r *permissionRepository) GetTeacherRoles(userID int) (any, error) {
 	rows, err := r.db.Query(`
-		SELECT tr.id, tr.role_name, tr.status, tr.verified_at
+		SELECT tr.id, tr.role_name, tr.status, tr.verified_at, tr.homeroom_class_id, tr.major_id, tr.subject_ids
 		FROM teacher_roles tr
 		JOIN teacher_profiles tp ON tp.id = tr.teacher_id
 		WHERE tp.user_id = ?
@@ -842,15 +842,18 @@ func (r *permissionRepository) GetTeacherRoles(userID int) (any, error) {
 	defer rows.Close()
 
 	type Role struct {
-		ID         int     `json:"id"`
-		RoleName   string  `json:"role_name"`
-		Status     string  `json:"status"`
-		VerifiedAt *string `json:"verified_at"`
+		ID              int     `json:"id"`
+		RoleName        string  `json:"role_name"`
+		Status          string  `json:"status"`
+		VerifiedAt      *string `json:"verified_at"`
+		HomeroomClassID *int    `json:"homeroom_class_id"`
+		MajorID         *int    `json:"major_id"`
+		SubjectIDs      *string `json:"subject_ids"`
 	}
 	var roles []Role
 	for rows.Next() {
 		var role Role
-		if err := rows.Scan(&role.ID, &role.RoleName, &role.Status, &role.VerifiedAt); err != nil {
+		if err := rows.Scan(&role.ID, &role.RoleName, &role.Status, &role.VerifiedAt, &role.HomeroomClassID, &role.MajorID, &role.SubjectIDs); err != nil {
 			continue
 		}
 		roles = append(roles, role)

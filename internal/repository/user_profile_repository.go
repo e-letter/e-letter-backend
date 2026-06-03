@@ -223,7 +223,7 @@ func (r *userProfileRepository) Update(userID int, payload domain.UserProfileUpd
 		updates = append(updates, "employee_code = ?")
 		args = append(args, *payload.NIP)
 	}
-	if payload.SignatureUrl != nil && (userRole == "teacher" || userRole == "kepala_sekolah") {
+	if payload.SignatureUrl != nil {
 		updates = append(updates, "signature_url = ?")
 		args = append(args, *payload.SignatureUrl)
 	}
@@ -568,4 +568,47 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 	}
 
 	return r.GetByUserID(payload.UserID)
+}
+
+func (r *userProfileRepository) GetSchedules(userID int) ([]domain.ScheduleDetail, error) {
+	// First get academic_year_id of active academic year
+	var academicYearID int
+	err := r.db.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&academicYearID)
+	if err != nil {
+		return nil, fmt.Errorf("gagal mendapatkan tahun ajaran aktif: %w", err)
+	}
+
+	rows, err := r.db.Query(`
+		SELECT class_id, subject_id, day_of_week, start_time, end_time
+		FROM schedules
+		WHERE teacher_id = (SELECT id FROM teacher_profiles WHERE user_id = ? AND deleted_at IS NULL)
+		  AND academic_year_id = ?
+		  AND is_active = 1
+	`, userID, academicYearID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var schedules []domain.ScheduleDetail
+	for rows.Next() {
+		var s domain.ScheduleDetail
+		var startTime, endTime string
+		if err := rows.Scan(&s.ClassID, &s.SubjectID, &s.DayOfWeek, &startTime, &endTime); err != nil {
+			return nil, err
+		}
+		// Convert "HH:MM:SS" to "HH:MM"
+		s.StartTime = formatTime(startTime)
+		s.EndTime = formatTime(endTime)
+		schedules = append(schedules, s)
+	}
+	return schedules, nil
+}
+
+func formatTime(t string) string {
+	parts := strings.Split(t, ":")
+	if len(parts) >= 2 {
+		return parts[0] + ":" + parts[1]
+	}
+	return t
 }

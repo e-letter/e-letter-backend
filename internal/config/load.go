@@ -115,6 +115,12 @@ func LoadConfig() *Config {
 			Username: mustGetEnv("KEPSEK_USERNAME"),
 			Password: mustGetEnv("KEPSEK_PASSWORD"),
 		},
+		Email: EmailConfig{
+			Host:     getEnv("EMAIL_HOST", "smtp.gmail.com"),
+			Port:     getEnv("EMAIL_PORT", "587"),
+			Sender:   getEnv("EMAIL_SENDER", ""),
+			Password: getEnv("EMAIL_PASSWORD", ""),
+		},
 	}
 
 	return cfg

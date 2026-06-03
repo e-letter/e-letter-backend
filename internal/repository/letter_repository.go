@@ -974,3 +974,32 @@ func (r *letterRepository) ListTeacherLetters(userID int, page, limit int) (*dom
 		TotalItems:  totalItems,
 	}, nil
 }
+
+func (r *letterRepository) IsHoliday(date string) (bool, error) {
+	var count int
+	err := r.db.QueryRow(`SELECT COUNT(*) FROM holidays WHERE holiday_date = ?`, date).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check holiday: %w", err)
+	}
+	return count > 0, nil
+}
+
+func (r *letterRepository) GetHolidays(year int) ([]domain.Holiday, error) {
+	rows, err := r.db.Query(`SELECT holiday_date, description FROM holidays WHERE YEAR(holiday_date) = ? ORDER BY holiday_date`, year)
+	if err != nil {
+		return nil, fmt.Errorf("get holidays: %w", err)
+	}
+	defer rows.Close()
+
+	var holidays []domain.Holiday
+	for rows.Next() {
+		var h domain.Holiday
+		var d string
+		if err := rows.Scan(&d, &h.Description); err != nil {
+			return nil, fmt.Errorf("scan holiday: %w", err)
+		}
+		h.Date = d
+		holidays = append(holidays, h)
+	}
+	return holidays, rows.Err()
+}

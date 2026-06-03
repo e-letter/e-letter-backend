@@ -4,12 +4,14 @@ type UserProfileRepository interface {
 	GetByUserID(userID int) (*User, error)
 	Update(userID int, payload UserProfileUpdateRequest) (*User, error)
 	CompleteTeacherOnboarding(payload CompleteTeacherOnboardingPayload) (*User, error)
+	GetSchedules(userID int) ([]ScheduleDetail, error)
 }
 
 type UserProfileService interface {
 	GetProfile(userID int) (*User, error)
 	UpdateProfile(req UserProfileUpdatePayload) (*User, error)
 	CompleteTeacherOnboarding(payload CompleteTeacherOnboardingPayload) (*User, error)
+	GetSchedules(userID int) ([]ScheduleDetail, error)
 }
 
 type UserProfileUpdateRequest struct {

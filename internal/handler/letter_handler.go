@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Refliqx/backend-eletter/internal/domain"
@@ -11,6 +12,15 @@ import (
 	"github.com/Refliqx/backend-eletter/internal/service"
 	"github.com/gin-gonic/gin"
 )
+
+// isValidationError returns true if the error is a user-facing validation error (400) vs internal (500).
+func isValidationError(err error) bool {
+	msg := err.Error()
+	return strings.HasPrefix(msg, "type_id,") ||
+		strings.HasPrefix(msg, "pengajuan") ||
+		strings.HasPrefix(msg, "format") ||
+		strings.HasPrefix(msg, "jam")
+}
 
 type LetterHandler struct {
 	service service.LetterService
@@ -218,7 +228,7 @@ func (h *LetterHandler) create(c *gin.Context) {
 	}
 	id, err := h.service.Create(userID, req)
 	if err != nil {
-		if err.Error() == "type_id, start_time, dan end_time diperlukan" {
+		if isValidationError(err) {
 			response.Raw(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -345,4 +355,28 @@ func (h *LetterHandler) TeacherStats(c *gin.Context) {
 		return
 	}
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": stats})
+}
+
+func (h *LetterHandler) GetHolidays(c *gin.Context) {
+	rows, err := h.db.Query(`SELECT DATE_FORMAT(holiday_date, '%Y-%m-%d'), description FROM holidays ORDER BY holiday_date`)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "Gagal memuat data hari libur")
+		return
+	}
+	defer rows.Close()
+
+	type holidayItem struct {
+		Date        string `json:"date"`
+		Description string `json:"description"`
+	}
+
+	var holidays []holidayItem
+	for rows.Next() {
+		var item holidayItem
+		if err := rows.Scan(&item.Date, &item.Description); err != nil {
+			continue
+		}
+		holidays = append(holidays, item)
+	}
+	response.Success(c, http.StatusOK, "", holidays)
 }

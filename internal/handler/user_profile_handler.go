@@ -195,23 +195,34 @@ func (h *UserProfileHandler) CompleteOnboarding(c *gin.Context) {
 
 	// For student and others
 	var req struct {
-		FullName     *string `json:"fullName"`
-		NIP          *string `json:"nip"`
-		Gender       *string `json:"gender"`
-		SignatureUrl *string `json:"signatureUrl"`
+		FullName          *string `json:"fullName"`
+		FullNameSnake     *string `json:"full_name"`
+		NIP               *string `json:"nip"`
+		Gender            *string `json:"gender"`
+		SignatureUrl      *string `json:"signatureUrl"`
+		SignatureUrlSnake *string `json:"signature_url"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
+	fullName := req.FullName
+	if fullName == nil {
+		fullName = req.FullNameSnake
+	}
+	signatureUrl := req.SignatureUrl
+	if signatureUrl == nil {
+		signatureUrl = req.SignatureUrlSnake
+	}
+
 	updatedUser, err := h.service.UpdateProfile(domain.UserProfileUpdatePayload{
 		UserID: userID,
 		UserProfileUpdateRequest: domain.UserProfileUpdateRequest{
-			FullName:          req.FullName,
+			FullName:          fullName,
 			NIP:               req.NIP,
 			Gender:            req.Gender,
-			SignatureUrl:      req.SignatureUrl,
+			SignatureUrl:      signatureUrl,
 			MarkProfileFinish: true,
 		},
 	})
@@ -223,5 +234,25 @@ func (h *UserProfileHandler) CompleteOnboarding(c *gin.Context) {
 	response.Success(c, http.StatusOK, "Onboarding berhasil diselesaikan", gin.H{
 		"userId":           updatedUser.ID,
 		"profileCompleted": updatedUser.ProfileCompleted,
+	})
+}
+
+func (h *UserProfileHandler) GetSchedules(c *gin.Context) {
+	userIDVal, ok := c.Get("userId")
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "Token akses diperlukan")
+		return
+	}
+	userID, _ := userIDVal.(int)
+
+	schedules, err := h.service.GetSchedules(userID)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "Gagal mengambil jadwal: "+err.Error())
+		return
+	}
+
+	response.Raw(c, http.StatusOK, gin.H{
+		"success": true,
+		"data":    schedules,
 	})
 }
