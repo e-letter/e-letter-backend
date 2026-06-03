@@ -11,12 +11,12 @@ import (
 //
 // Approval flow for izin_keluar (RBAC.md §9):
 //
-//	Normal (≤30 min): guru_mapel (step 1) → wali_kelas (step 2) → tatib (step 3)
+//	Normal (≤30 min): guru_mapel (step 1) → tatib (step 2)
 //	  – strictly sequential; each role must approve before the next step unlocks.
 //
 //	Bypass (>30 min): kapro is NOT a step — it is a bypass authority only.
-//	  – If guru_mapel and/or wali_kelas have not approved within 30 minutes, kapro may
-//	    approve their pending steps on their behalf (those steps are auto-skipped in Approve()).
+//	  – If guru_mapel has not approved within 30 minutes, kapro may
+//	    approve their pending step on their behalf (that step is auto-skipped in Approve()).
 //	  – Tatib is ALWAYS the mandatory final approver and is NEVER bypassable.
 //
 //	Multi-role: if the approver holds multiple overlapping roles, Approve() cascades
@@ -109,8 +109,9 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 	}
 
 	// bypassableRoles: roles that kapro may approve on behalf of after the 30-minute window.
+	// Per RBAC.md §9 the izin_keluar flow is guru_mapel → tatib; only guru_mapel is bypassable.
 	// tatib is intentionally excluded — it is always the mandatory final approver.
-	bypassableRoles := map[string]bool{"guru_mapel": true, "wali_kelas": true}
+	bypassableRoles := map[string]bool{"guru_mapel": true}
 	isKaproBypassingThisStep := isIzinKeluarLate && callerIsKapro && bypassableRoles[targetStep.approverRole]
 
 	// 5. Sequential-order enforcement.

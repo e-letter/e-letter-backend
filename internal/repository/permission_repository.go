@@ -366,10 +366,9 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 	// 2.5 Time-bounded bypass (izin_keluar >30 min) & multi-role cascade
 	//
 	// RBAC.md §9 rules:
-	//   • Within 30 min: strictly sequential (guru_mapel → wali_kelas → kapro → tatib).
-	//   • After  30 min: kapro may approve on behalf of guru_mapel & wali_kelas; those pending
-	//     steps are auto-skipped immediately. Kapro's own step is then handled normally.
-	//     Tatib is ALWAYS mandatory and is NEVER auto-skipped.
+	//   • Within 30 min: strictly sequential (guru_mapel → tatib).
+	//   • After  30 min: kapro may approve on behalf of guru_mapel; that pending
+	//     step is auto-skipped immediately. Tatib is ALWAYS mandatory and NEVER skipped.
 	//   • Multi-role: when the acting user holds multiple roles that overlap with pending steps,
 	//     the cascade loop below auto-approves those steps on their behalf.
 	var elapsedMinutes int
@@ -416,7 +415,7 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 					    notes = 'Auto-skipped: Disetujui oleh Kapro sebagai perwakilan (lebih dari 30 menit).',
 					    acted_at = NOW(), updated_at = NOW()
 					WHERE request_id = ? AND status = 'pending'
-					  AND approver_role IN ('guru_mapel', 'wali_kelas')
+					  AND approver_role = 'guru_mapel'
 					  AND deleted_at IS NULL`,
 					req.RequestID,
 				)
