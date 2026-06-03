@@ -302,37 +302,56 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 	defer tx.Rollback()
 
 	// 1. Validate approval step & role authority
-	callerTeacherID, _, approverRole, isDelegated, delegatedFromID, err := ValidateApprovalStep(tx, req.RequestID, req.StageID, approverID)
+	callerTeacherID, callerPrincipalID, _, isDelegated, delegatedFromID, err := ValidateApprovalStep(tx, req.RequestID, req.StageID, approverID)
 	if err != nil {
 		return err
 	}
 
-	// 2. Perform the update based on role and delegation
-	var res sql.Result
-	if isDelegated {
-		res, err = tx.Exec(
-			`UPDATE request_approvals
-			 SET status = ?, notes = ?, signature_url = ?, acted_at = NOW(), updated_at = NOW(),
-			     is_delegated = 1, delegated_from_id = ?, approver_teacher_id = ?
-			 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
-			req.Status, req.Notes, req.SignatureURL, delegatedFromID, callerTeacherID, req.RequestID, req.StageID,
-		)
-	} else if approverRole == "tatib" {
-		res, err = tx.Exec(
-			`UPDATE request_approvals
-			 SET status = ?, notes = ?, signature_url = ?, acted_at = NOW(), updated_at = NOW(),
-			     approver_teacher_id = ?
-			 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
-			req.Status, req.Notes, req.SignatureURL, callerTeacherID, req.RequestID, req.StageID,
-		)
-	} else {
-		res, err = tx.Exec(
-			`UPDATE request_approvals
-			 SET status = ?, notes = ?, signature_url = ?, acted_at = NOW(), updated_at = NOW()
-			 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
-			req.Status, req.Notes, req.SignatureURL, req.RequestID, req.StageID,
-		)
+	// Fetch signature URL from profile
+	var signatureURLVal *string
+	if req.Status == "approved" {
+		var sigStr sql.NullString
+		if callerTeacherID > 0 {
+			err = tx.QueryRow(`SELECT signature_url FROM teacher_profiles WHERE id = ? AND deleted_at IS NULL`, callerTeacherID).Scan(&sigStr)
+			if err != nil && err != sql.ErrNoRows {
+				return fmt.Errorf("fetch teacher signature: %w", err)
+			}
+		} else if callerPrincipalID > 0 {
+			err = tx.QueryRow(`SELECT signature_url FROM principal_profiles WHERE id = ? AND deleted_at IS NULL`, callerPrincipalID).Scan(&sigStr)
+			if err != nil && err != sql.ErrNoRows {
+				return fmt.Errorf("fetch principal signature: %w", err)
+			}
+		}
+		if sigStr.Valid && sigStr.String != "" {
+			signatureURLVal = &sigStr.String
+		} else {
+			signatureURLVal = req.SignatureURL
+		}
 	}
+
+	// 2. Perform the update based on role and delegation
+	var teacherIDVal *int64
+	if callerTeacherID > 0 {
+		teacherIDVal = &callerTeacherID
+	}
+	var principalIDVal *int64
+	if callerPrincipalID > 0 {
+		principalIDVal = &callerPrincipalID
+	}
+	var delegatedFromVal *int64
+	if isDelegated {
+		delegatedFromVal = &delegatedFromID
+	}
+
+	res, err := tx.Exec(
+		`UPDATE request_approvals
+		 SET status = ?, notes = ?, signature_url = ?, acted_at = NOW(), updated_at = NOW(),
+		     is_delegated = ?, delegated_from_id = ?, approver_teacher_id = ?, approver_principal_id = ?
+		 WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
+		req.Status, req.Notes, signatureURLVal,
+		isDelegated, delegatedFromVal, teacherIDVal, principalIDVal,
+		req.RequestID, req.StageID,
+	)
 	if err != nil {
 		return err
 	}
@@ -437,39 +456,45 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 
 		anyApprovedThisPass := false
 		for _, sn := range pendingStepNos {
-			cascadeTeacherID, _, cascadeRole, cascadeIsDelegated, cascadeDelegatedFromID, cascadeErr := ValidateApprovalStep(tx, req.RequestID, sn, approverID)
+			cascadeTeacherID, cascadePrincipalID, _, cascadeIsDelegated, cascadeDelegatedFromID, cascadeErr := ValidateApprovalStep(tx, req.RequestID, sn, approverID)
 			if cascadeErr == nil {
-				var cascadeRes sql.Result
-				if cascadeIsDelegated {
-					cascadeRes, err = tx.Exec(`
-						UPDATE request_approvals
-						SET status = 'approved',
-						    notes = 'Auto-approved: Persetujuan multi-role sinkron.',
-						    acted_at = NOW(), updated_at = NOW(),
-						    is_delegated = 1, delegated_from_id = ?, approver_teacher_id = ?
-						WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
-						cascadeDelegatedFromID, cascadeTeacherID, req.RequestID, sn,
-					)
-				} else if cascadeRole == "tatib" {
-					cascadeRes, err = tx.Exec(`
-						UPDATE request_approvals
-						SET status = 'approved',
-						    notes = 'Auto-approved: Persetujuan multi-role sinkron.',
-						    acted_at = NOW(), updated_at = NOW(),
-						    approver_teacher_id = ?
-						WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
-						cascadeTeacherID, req.RequestID, sn,
-					)
-				} else {
-					cascadeRes, err = tx.Exec(`
-						UPDATE request_approvals
-						SET status = 'approved',
-						    notes = 'Auto-approved: Persetujuan multi-role sinkron.',
-						    acted_at = NOW(), updated_at = NOW()
-						WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
-						req.RequestID, sn,
-					)
+				var cascadeSignatureURLVal *string
+				var sigStr sql.NullString
+				if cascadeTeacherID > 0 {
+					err = tx.QueryRow(`SELECT signature_url FROM teacher_profiles WHERE id = ? AND deleted_at IS NULL`, cascadeTeacherID).Scan(&sigStr)
+					if err == nil && sigStr.Valid && sigStr.String != "" {
+						cascadeSignatureURLVal = &sigStr.String
+					}
+				} else if cascadePrincipalID > 0 {
+					err = tx.QueryRow(`SELECT signature_url FROM principal_profiles WHERE id = ? AND deleted_at IS NULL`, cascadePrincipalID).Scan(&sigStr)
+					if err == nil && sigStr.Valid && sigStr.String != "" {
+						cascadeSignatureURLVal = &sigStr.String
+					}
 				}
+
+				var cascadeTeacherVal *int64
+				if cascadeTeacherID > 0 {
+					cascadeTeacherVal = &cascadeTeacherID
+				}
+				var cascadePrincipalVal *int64
+				if cascadePrincipalID > 0 {
+					cascadePrincipalVal = &cascadePrincipalID
+				}
+				var cascadeDelegatedFromVal *int64
+				if cascadeIsDelegated {
+					cascadeDelegatedFromVal = &cascadeDelegatedFromID
+				}
+
+				cascadeRes, err := tx.Exec(`
+					UPDATE request_approvals
+					SET status = 'approved',
+					    notes = 'Auto-approved: Persetujuan multi-role sinkron.',
+					    signature_url = ?, acted_at = NOW(), updated_at = NOW(),
+					    is_delegated = ?, delegated_from_id = ?, approver_teacher_id = ?, approver_principal_id = ?
+					WHERE request_id = ? AND step_no = ? AND deleted_at IS NULL`,
+					cascadeSignatureURLVal, cascadeIsDelegated, cascadeDelegatedFromVal, cascadeTeacherVal, cascadePrincipalVal,
+					req.RequestID, sn,
+				)
 				if err != nil {
 					return err
 				}
@@ -707,10 +732,12 @@ func (r *permissionRepository) GetRequestDetail(requestID int) (any, error) {
 
 	rows, err := r.db.Query(`
 		SELECT ra.id, ra.step_no, ra.approver_role, ra.status, ra.notes, ra.signature_url, ra.acted_at,
-		       COALESCE(tp.full_name, pp.full_name, '') as approver_name
+		       COALESCE(tp.full_name, pp.full_name, sp.full_name, '') AS approver_name
 		FROM request_approvals ra
 		LEFT JOIN teacher_profiles tp ON tp.id = ra.approver_teacher_id
 		LEFT JOIN principal_profiles pp ON pp.id = ra.approver_principal_id
+		LEFT JOIN requests r ON r.id = ra.request_id
+		LEFT JOIN student_profiles sp ON sp.user_id = r.requester_user_id AND ra.approver_role = 'student'
 		WHERE ra.request_id = ? AND ra.deleted_at IS NULL
 		ORDER BY ra.step_no
 	`, requestID)
@@ -741,7 +768,8 @@ func (r *permissionRepository) GetRequestDetail(requestID int) (any, error) {
 
 	studentRows, err := r.db.Query(`
 		SELECT sp.id, sp.user_id, sp.full_name, sp.student_code,
-		       COALESCE(c.class_name, '-'), COALESCE(u.email, '-')
+		       COALESCE(c.class_name, '-'), COALESCE(u.email, '-'),
+		       sp.signature_url
 		FROM request_students rs
 		JOIN student_profiles sp ON sp.id = rs.student_id AND sp.deleted_at IS NULL
 		JOIN users u ON u.id = sp.user_id AND u.deleted_at IS NULL
@@ -756,18 +784,19 @@ func (r *permissionRepository) GetRequestDetail(requestID int) (any, error) {
 	defer studentRows.Close()
 
 	type StudentEntry struct {
-		ID          int    `json:"id"`
-		UserID      int    `json:"user_id"`
-		FullName    string `json:"full_name"`
-		StudentCode string `json:"student_code"`
-		ClassName   string `json:"class_name"`
-		Email       string `json:"email"`
+		ID           int     `json:"id"`
+		UserID       int     `json:"user_id"`
+		FullName     string  `json:"full_name"`
+		StudentCode  string  `json:"student_code"`
+		ClassName    string  `json:"class_name"`
+		Email        string  `json:"email"`
+		SignatureURL *string `json:"signature_url"`
 	}
 
 	students := make([]StudentEntry, 0)
 	for studentRows.Next() {
 		var s StudentEntry
-		if err := studentRows.Scan(&s.ID, &s.UserID, &s.FullName, &s.StudentCode, &s.ClassName, &s.Email); err != nil {
+		if err := studentRows.Scan(&s.ID, &s.UserID, &s.FullName, &s.StudentCode, &s.ClassName, &s.Email, &s.SignatureURL); err != nil {
 			continue
 		}
 		students = append(students, s)
