@@ -317,9 +317,9 @@ func (s *authService) ForgotPassword(email, ip string) error {
 
 	realEmail := email
 	redirectEmail := os.Getenv("EMAIL_REDIRECT_TO")
-	if redirectEmail != "" && strings.EqualFold(email, redirectEmail) {
-		realEmail = "halo@guru.smk.belajar.id"
-		fmt.Printf("[DEBUG] Mapping input email %q to database user %q because EMAIL_REDIRECT_TO matches\n", email, realEmail)
+	if redirectEmail != "" {
+		realEmail = "admin@gmail.com"
+		fmt.Printf("[DEBUG] Mapping input email %q to database user %q because EMAIL_REDIRECT_TO is set\n", email, realEmail)
 	}
 
 	user, err := s.repo.GetUserByEmail(realEmail)
@@ -363,9 +363,9 @@ func (s *authService) ForgotPassword(email, ip string) error {
 func (s *authService) VerifyOTP(email, otp string) error {
 	realEmail := email
 	redirectEmail := os.Getenv("EMAIL_REDIRECT_TO")
-	if redirectEmail != "" && strings.EqualFold(email, redirectEmail) {
-		realEmail = "halo@guru.smk.belajar.id"
-		fmt.Printf("[DEBUG] Mapping input email %q to database user %q for OTP verification because EMAIL_REDIRECT_TO matches\n", email, realEmail)
+	if redirectEmail != "" {
+		realEmail = "admin@gmail.com"
+		fmt.Printf("[DEBUG] Mapping input email %q to database user %q for OTP verification because EMAIL_REDIRECT_TO is set\n", email, realEmail)
 	}
 
 	otpHash := utils.HashToken(otp)
@@ -379,9 +379,9 @@ func (s *authService) VerifyOTP(email, otp string) error {
 func (s *authService) ResetPassword(email, otp, newPassword string) error {
 	realEmail := email
 	redirectEmail := os.Getenv("EMAIL_REDIRECT_TO")
-	if redirectEmail != "" && strings.EqualFold(email, redirectEmail) {
-		realEmail = "halo@guru.smk.belajar.id"
-		fmt.Printf("[DEBUG] Mapping input email %q to database user %q for password reset because EMAIL_REDIRECT_TO matches\n", email, realEmail)
+	if redirectEmail != "" {
+		realEmail = "admin@gmail.com"
+		fmt.Printf("[DEBUG] Mapping input email %q to database user %q for password reset because EMAIL_REDIRECT_TO is set\n", email, realEmail)
 	}
 
 	otpHash := utils.HashToken(otp)

@@ -33,8 +33,6 @@ type Mailer interface {
 // Config holds the Resend credentials loaded from environment variables.
 type Config struct {
 	APIKey     string // RESEND_API_KEY
-	Sender     string // RESEND_FROM or a verified sender address
-	RedirectTo string // EMAIL_REDIRECT_TO
 }
 
 type resendMailer struct {
@@ -47,7 +45,7 @@ type resendMailer struct {
 // app boots even when email delivery is not configured yet.
 func New(cfg Config) Mailer {
 	m := &resendMailer{cfg: cfg}
-	if strings.TrimSpace(cfg.APIKey) != "" && strings.TrimSpace(cfg.Sender) != "" {
+	if strings.TrimSpace(cfg.APIKey) != "" {
 		m.sender = newEmailSender(cfg.APIKey)
 	}
 	return m
@@ -70,18 +68,14 @@ func (m *resendMailer) SendOTP(toEmail, otp string, expiresAt time.Time) error {
 		return nil
 	}
 
-	recipient := toEmail
-	if strings.TrimSpace(m.cfg.RedirectTo) != "" {
-		fmt.Printf("[EMAIL-OTP] Redirecting email from %s to %s\n", toEmail, m.cfg.RedirectTo)
-		recipient = strings.TrimSpace(m.cfg.RedirectTo)
-	}
+	fromAddress := "SiPena <sipena@resend.dev>"
 
-	subject := "Kode OTP Reset Password - E-Letter"
+	subject := "Kode OTP Reset Password - SiPena"
 	body := buildOTPEmail(toEmail, otp, expiresAt)
 
 	_, err := m.sender.Send(&resend.SendEmailRequest{
-		From:    m.cfg.Sender,
-		To:      []string{recipient},
+		From:    fromAddress,
+		To:      []string{toEmail},
 		Subject: subject,
 		Html:    body,
 	})
@@ -113,7 +107,7 @@ func buildOTPEmail(toEmail, otp string, expiresAt time.Time) string {
             <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;letter-spacing:.5px;">
               🔐 Reset Password
             </h1>
-            <p style="margin:8px 0 0;color:#bfdbfe;font-size:13px;">E-Letter · SMK Negeri 2 Singosari</p>
+            <p style="margin:8px 0 0;color:#bfdbfe;font-size:13px;">SiPena · SMK Negeri 2 Singosari</p>
           </td>
         </tr>
         <!-- Body -->
@@ -138,7 +132,7 @@ func buildOTPEmail(toEmail, otp string, expiresAt time.Time) string {
               </p>
             </div>
             <p style="margin:0 0 8px;color:#6b7280;font-size:13px;line-height:1.6;">
-              ⚠️ Jangan bagikan kode ini kepada siapapun termasuk pihak E-Letter.<br>
+              ⚠️ Jangan bagikan kode ini kepada siapapun termasuk pihak SiPena.<br>
               Jika Anda tidak meminta reset password, abaikan email ini.
             </p>
           </td>
@@ -147,7 +141,7 @@ func buildOTPEmail(toEmail, otp string, expiresAt time.Time) string {
         <tr>
           <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;text-align:center;">
             <p style="margin:0;color:#9ca3af;font-size:12px;">
-              © 2025 E-Letter · SMK Negeri 2 Singosari<br>
+              © 2025 SiPena · SMK Negeri 2 Singosari<br>
               Email ini dikirim secara otomatis, mohon tidak membalas.
             </p>
           </td>

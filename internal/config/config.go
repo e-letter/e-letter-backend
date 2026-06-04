@@ -27,7 +27,6 @@ type KepsekConfig struct {
 // EmailConfig holds Resend credentials used for sending OTP emails.
 type EmailConfig struct {
 	APIKey     string // RESEND_API_KEY
-	Sender     string // RESEND_FROM or a verified sender address
 	RedirectTo string // EMAIL_REDIRECT_TO
 }
 

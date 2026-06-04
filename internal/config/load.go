@@ -118,7 +118,6 @@ func LoadConfig() *Config {
 		},
 		Email: EmailConfig{
 			APIKey:     getEnv("RESEND_API_KEY", ""),
-			Sender:     getEnv("RESEND_FROM", getEnv("EMAIL_SENDER", "")),
 			RedirectTo: getEnv("EMAIL_REDIRECT_TO", ""),
 		},
 	}
