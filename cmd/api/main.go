@@ -34,10 +34,8 @@ func main() {
 	notificationRepo := repository.NewNotificationRepository(db)
 
 	emailMailer := mailer.New(mailer.Config{
-		Host:     cfg.Email.Host,
-		Port:     cfg.Email.Port,
-		Sender:   cfg.Email.Sender,
-		Password: cfg.Email.Password,
+		APIKey: cfg.Email.APIKey,
+		Sender: cfg.Email.Sender,
 	})
 
 	authService := service.NewAuthService(authRepo, notificationRepo, emailMailer, cfg.JWT.Secret, cfg.JWT.AccessExpiresIn, cfg.JWT.RefreshExpiresIn)

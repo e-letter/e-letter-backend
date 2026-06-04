@@ -24,12 +24,10 @@ type KepsekConfig struct {
 	Password string
 }
 
-// EmailConfig holds SMTP credentials used for sending OTP emails.
+// EmailConfig holds Resend credentials used for sending OTP emails.
 type EmailConfig struct {
-	Host     string // SMTP server host, e.g. smtp.gmail.com
-	Port     string // SMTP server port, e.g. 587
-	Sender   string // From address (EMAIL_SENDER)
-	Password string // SMTP password or app-password (EMAIL_PASSWORD)
+	APIKey string // RESEND_API_KEY
+	Sender string // RESEND_FROM or a verified sender address
 }
 
 type AppConfig struct {

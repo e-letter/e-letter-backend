@@ -1,11 +1,11 @@
 package mailer
 
 import (
-	"fmt"
-	"net/smtp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/resend/resend-go/v3"
 )
 
 func TestBuildOTPEmail(t *testing.T) {
@@ -21,88 +21,62 @@ func TestBuildOTPEmail(t *testing.T) {
 	}
 }
 
-func TestSendOTPWithoutSMTPConfigSkipsDelivery(t *testing.T) {
-	originalSendMail := sendMail
-	defer func() { sendMail = originalSendMail }()
-
+func TestSendOTPWithoutResendConfigSkipsDelivery(t *testing.T) {
 	called := false
-	sendMail = func(string, smtp.Auth, string, []string, []byte) error {
-		called = true
-		return nil
-	}
+	mailer := &resendMailer{cfg: Config{}}
 
-	mailer := &smtpMailer{cfg: Config{}}
 	if err := mailer.SendOTP("user@example.com", "123456", time.Now()); err != nil {
-		t.Fatalf("expected no error when SMTP is not configured, got %v", err)
+		t.Fatalf("expected no error when Resend is not configured, got %v", err)
 	}
 	if called {
-		t.Fatal("expected SMTP send to be skipped when config is incomplete")
+		t.Fatal("expected Resend send to be skipped when config is incomplete")
 	}
 }
 
-func TestSendOTPSendsSMTPMessage(t *testing.T) {
-	originalSendMail := sendMail
-	defer func() { sendMail = originalSendMail }()
+func TestSendOTPSendsResendMessage(t *testing.T) {
+	var captured *resend.SendEmailRequest
 
-	var (
-		addr   string
-		from   string
-		toList []string
-		rawMsg []byte
-	)
-
-	sendMail = func(a string, auth smtp.Auth, f string, to []string, msg []byte) error {
-		if got := fmt.Sprintf("%T", auth); !strings.Contains(got, "plainAuth") {
-			t.Fatalf("expected plain auth, got %s", got)
-		}
-		addr = a
-		from = f
-		toList = append([]string(nil), to...)
-		rawMsg = append([]byte(nil), msg...)
-		return nil
+	mailer := &resendMailer{
+		cfg: Config{
+			APIKey: "re_test_key",
+			Sender: "E-Letter <noreply@example.com>",
+		},
+		sender: &stubSender{
+			sendFn: func(req *resend.SendEmailRequest) (*resend.SendEmailResponse, error) {
+				captured = req
+				return nil, nil
+			},
+		},
 	}
-
-	mailer := &smtpMailer{cfg: Config{
-		Host:     "smtp.example.com",
-		Port:     "587",
-		Sender:   "noreply@example.com",
-		Password: "secret",
-	}}
 
 	expiresAt := time.Date(2026, 6, 4, 14, 30, 0, 0, time.UTC)
 	if err := mailer.SendOTP(" user@example.com ", " 654321 ", expiresAt); err != nil {
 		t.Fatalf("expected send to succeed, got %v", err)
 	}
 
-	if addr != "smtp.example.com:587" {
-		t.Fatalf("unexpected SMTP addr: %s", addr)
+	if captured == nil {
+		t.Fatal("expected resend payload to be captured")
 	}
-	if from != "noreply@example.com" {
-		t.Fatalf("unexpected from address: %s", from)
+	if captured.From != "E-Letter <noreply@example.com>" {
+		t.Fatalf("unexpected from address: %s", captured.From)
 	}
-	if len(toList) != 1 || toList[0] != "user@example.com" {
-		t.Fatalf("unexpected recipient list: %#v", toList)
+	if len(captured.To) != 1 || captured.To[0] != "user@example.com" {
+		t.Fatalf("unexpected recipient list: %#v", captured.To)
+	}
+	if captured.Subject != "Kode OTP Reset Password - E-Letter" {
+		t.Fatalf("unexpected subject: %s", captured.Subject)
 	}
 
-	msg := string(rawMsg)
-	if !strings.Contains(msg, "Subject: Kode OTP Reset Password") {
-		t.Fatalf("expected subject header in message, got %q", msg)
+	if !strings.Contains(captured.Html, "654321") {
+		t.Fatalf("expected OTP to be present in html, got %q", captured.Html)
 	}
-	if !strings.Contains(msg, "654321") {
-		t.Fatalf("expected OTP to be present in message, got %q", msg)
-	}
-	if !strings.Contains(msg, "04 June 2026 21:30 WIB") {
-		t.Fatalf("expected expiry to be present in message, got %q", msg)
+	if !strings.Contains(captured.Html, "04 June 2026 21:30 WIB") {
+		t.Fatalf("expected expiry to be present in html, got %q", captured.Html)
 	}
 }
 
 func TestSendOTPRejectsEmptyValues(t *testing.T) {
-	mailer := &smtpMailer{cfg: Config{
-		Host:     "smtp.example.com",
-		Port:     "587",
-		Sender:   "noreply@example.com",
-		Password: "secret",
-	}}
+	mailer := &resendMailer{cfg: Config{APIKey: "re_test_key", Sender: "E-Letter <noreply@example.com>"}}
 
 	if err := mailer.SendOTP("   ", "123456", time.Now()); err == nil {
 		t.Fatal("expected error for empty recipient")
@@ -123,4 +97,15 @@ func TestJakartaLocationFallback(t *testing.T) {
 	if offset != 7*60*60 {
 		t.Fatalf("expected WIB offset, got %d", offset)
 	}
+}
+
+type stubSender struct {
+	sendFn func(*resend.SendEmailRequest) (*resend.SendEmailResponse, error)
+}
+
+func (s *stubSender) Send(req *resend.SendEmailRequest) (*resend.SendEmailResponse, error) {
+	if s.sendFn == nil {
+		return nil, nil
+	}
+	return s.sendFn(req)
 }

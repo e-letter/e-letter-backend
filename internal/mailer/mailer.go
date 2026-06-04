@@ -2,40 +2,57 @@ package mailer
 
 import (
 	"fmt"
-	"net"
-	"net/smtp"
 	"strings"
 	"time"
+
+	"github.com/resend/resend-go/v3"
 )
 
-var sendMail = smtp.SendMail
+type emailSender interface {
+	Send(*resend.SendEmailRequest) (*resend.SendEmailResponse, error)
+}
+
+type resendSDKSender struct {
+	client *resend.Client
+}
+
+func (s *resendSDKSender) Send(req *resend.SendEmailRequest) (*resend.SendEmailResponse, error) {
+	return s.client.Emails.Send(req)
+}
+
+var newEmailSender = func(apiKey string) emailSender {
+	return &resendSDKSender{client: resend.NewClient(apiKey)}
+}
 
 // Mailer is the interface the auth service depends on.
-// Tests can swap in a mock without touching SMTP.
+// Tests can swap in a mock without touching Resend.
 type Mailer interface {
 	SendOTP(toEmail, otp string, expiresAt time.Time) error
 }
 
-// Config holds the SMTP credentials loaded from environment variables.
+// Config holds the Resend credentials loaded from environment variables.
 type Config struct {
-	Host     string // e.g. smtp.gmail.com
-	Port     string // e.g. 587
-	Sender   string // EMAIL_SENDER — the From address
-	Password string // EMAIL_PASSWORD — SMTP password / app-password
+	APIKey string // RESEND_API_KEY
+	Sender string // RESEND_FROM or a verified sender address
 }
 
-type smtpMailer struct {
-	cfg Config
+type resendMailer struct {
+	cfg    Config
+	sender emailSender
 }
 
-// New returns a production SMTP Mailer.
-// If the sender address is empty the mailer falls back to console-only mode
-// so the app boots even when email is not yet configured.
+// New returns a production Resend mailer.
+// If credentials are not set the mailer falls back to console-only mode so the
+// app boots even when email delivery is not configured yet.
 func New(cfg Config) Mailer {
-	return &smtpMailer{cfg: cfg}
+	m := &resendMailer{cfg: cfg}
+	if strings.TrimSpace(cfg.APIKey) != "" && strings.TrimSpace(cfg.Sender) != "" {
+		m.sender = newEmailSender(cfg.APIKey)
+	}
+	return m
 }
 
-func (m *smtpMailer) SendOTP(toEmail, otp string, expiresAt time.Time) error {
+func (m *resendMailer) SendOTP(toEmail, otp string, expiresAt time.Time) error {
 	toEmail = strings.TrimSpace(toEmail)
 	otp = strings.TrimSpace(otp)
 
@@ -46,27 +63,22 @@ func (m *smtpMailer) SendOTP(toEmail, otp string, expiresAt time.Time) error {
 		return fmt.Errorf("kode OTP kosong")
 	}
 
-	// Skip actual SMTP delivery if credentials are not set.
-	if m.cfg.Sender == "" || m.cfg.Password == "" || m.cfg.Host == "" {
-		fmt.Printf("[EMAIL-OTP] SMTP credentials not configured - email to %s skipped.\n", toEmail)
+	// Skip actual delivery if credentials are not set.
+	if m.sender == nil {
+		fmt.Printf("[EMAIL-OTP] Resend credentials not configured - email to %s skipped.\n", toEmail)
 		return nil
 	}
 
-	subject := "Kode OTP Reset Password — E-Letter"
+	subject := "Kode OTP Reset Password - E-Letter"
 	body := buildOTPEmail(toEmail, otp, expiresAt)
 
-	msg := "From: " + m.cfg.Sender + "\r\n" +
-		"To: " + toEmail + "\r\n" +
-		"Subject: " + subject + "\r\n" +
-		"MIME-Version: 1.0\r\n" +
-		"Content-Type: text/html; charset=UTF-8\r\n" +
-		"\r\n" +
-		body
-
-	addr := net.JoinHostPort(m.cfg.Host, m.cfg.Port)
-	auth := smtp.PlainAuth("", m.cfg.Sender, m.cfg.Password, m.cfg.Host)
-
-	if err := sendMail(addr, auth, m.cfg.Sender, []string{toEmail}, []byte(msg)); err != nil {
+	_, err := m.sender.Send(&resend.SendEmailRequest{
+		From:    m.cfg.Sender,
+		To:      []string{toEmail},
+		Subject: subject,
+		Html:    body,
+	})
+	if err != nil {
 		return fmt.Errorf("gagal mengirim email OTP: %w", err)
 	}
 	return nil

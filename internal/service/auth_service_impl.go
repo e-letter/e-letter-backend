@@ -329,7 +329,7 @@ func (s *authService) ForgotPassword(email, ip string) error {
 		return err
 	}
 
-	// Send OTP asynchronously so the request returns without waiting on SMTP/TLS.
+	// Send OTP asynchronously so the request returns without waiting on email delivery.
 	go func(recipient, code string, expiry time.Time) {
 		if err := s.mailer.SendOTP(recipient, code, expiry); err != nil {
 			// Log the error but don't fail the request — the OTP is already stored.
