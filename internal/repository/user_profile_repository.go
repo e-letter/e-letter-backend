@@ -487,6 +487,11 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 			// 'tatib' is a general administrative role that does not require additional class/major assignments.
 			break
 
+		case "pembina":
+			// 'pembina' can create dispensasi letters and can only see their own dispensasi letters.
+			// No additional class/major/subject assignments required.
+			break
+
 		default:
 			return nil, fmt.Errorf("role guru tidak dikenal: %s", roleName)
 		}

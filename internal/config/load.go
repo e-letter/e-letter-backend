@@ -41,6 +41,7 @@ func LoadConfig() *Config {
 			User:            mustGetEnv("DB_USER"),
 			Password:        mustGetEnv("DB_PASSWORD"),
 			Name:            mustGetEnv("DB_NAME"),
+			TLSEnabled:      getEnv("DB_TLS", ""),
 			MaxOpenConns:    dbMaxOpenConns,
 			MaxIdleConns:    dbMaxIdleConns,
 			ConnMaxLife:     dbConnMaxLifetime,

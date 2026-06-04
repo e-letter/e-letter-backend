@@ -43,11 +43,15 @@ func (h *AuthHandler) Register(c *gin.Context) {
 
 	userID, loginCode, err := h.service.Register(req)
 	if err != nil {
-		if strings.Contains(err.Error(), "terdaftar") {
-			response.Error(c, http.StatusConflict, err.Error())
+		// Only map the two specific duplicate-email errors to 409 Conflict.
+		// Avoid matching DB trigger messages like "tidak terdaftar di ref_values"
+		// which contain the same substring but are unrelated validation errors.
+		errMsg := err.Error()
+		if errMsg == "Email sudah terdaftar" || errMsg == "Email sudah terdaftar dan sedang menunggu persetujuan admin" {
+			response.Error(c, http.StatusConflict, errMsg)
 			return
 		}
-		response.Error(c, http.StatusBadRequest, err.Error())
+		response.Error(c, http.StatusBadRequest, errMsg)
 		return
 	}
 

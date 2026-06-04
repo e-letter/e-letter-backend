@@ -47,6 +47,7 @@ type DBConfig struct {
 	User            string
 	Password        string
 	Name            string
+	TLSEnabled      string // "true", "skip-verify", or empty (no TLS)
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLife     time.Duration

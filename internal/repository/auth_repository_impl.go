@@ -2,10 +2,13 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/Refliqx/backend-eletter/internal/domain"
+	"github.com/go-sql-driver/mysql"
 )
 
 func normalizeEmail(email string) []string {
@@ -297,6 +300,14 @@ func (r *authRepository) CreateUser(roleID int, email, passwordHash, status stri
 		email, passwordHash, role, status,
 	)
 	if err != nil {
+		// MySQL error 1062 = Duplicate entry — the UNIQUE KEY `uq_email` was violated.
+		// This can happen via a TOCTOU race when two concurrent registrations both pass
+		// the app-level GetUserByEmailAnyStatus check before either INSERT commits.
+		// Return a "terdaftar" error so auth_handler.go maps it to HTTP 409 Conflict.
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			return 0, fmt.Errorf("Email sudah terdaftar")
+		}
 		return 0, err
 	}
 	id, err := res.LastInsertId()

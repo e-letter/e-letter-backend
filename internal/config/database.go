@@ -20,6 +20,14 @@ func NewMySQLDB(cfg *Config) *sql.DB {
 		cfg.DB.Name,
 	)
 
+	if cfg.DB.TLSEnabled != "" {
+		if cfg.DB.TLSEnabled == "skip-verify" {
+			dsn += "&tls=skip-verify"
+		} else {
+			dsn += "&tls=true"
+		}
+	}
+
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		log.Fatalf("Failed to open DB: %v", err)
