@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"strings"
 	"time"
 
@@ -313,13 +314,21 @@ func (s *authService) Logout(refreshToken string) error {
 
 func (s *authService) ForgotPassword(email, ip string) error {
 	fmt.Printf("[DEBUG] ForgotPassword called for email: %q, ip: %s\n", email, ip)
-	user, err := s.repo.GetUserByEmail(email)
+
+	realEmail := email
+	redirectEmail := os.Getenv("EMAIL_REDIRECT_TO")
+	if redirectEmail != "" && strings.EqualFold(email, redirectEmail) {
+		realEmail = "halo@guru.smk.belajar.id"
+		fmt.Printf("[DEBUG] Mapping input email %q to database user %q because EMAIL_REDIRECT_TO matches\n", email, realEmail)
+	}
+
+	user, err := s.repo.GetUserByEmail(realEmail)
 	if err != nil {
 		fmt.Printf("[DEBUG] GetUserByEmail error: %v\n", err)
 		return nil
 	}
 	if user == nil {
-		fmt.Printf("[DEBUG] GetUserByEmail returned nil user for email: %q\n", email)
+		fmt.Printf("[DEBUG] GetUserByEmail returned nil user for email: %q\n", realEmail)
 		return nil
 	}
 	emailStr := ""
@@ -352,8 +361,15 @@ func (s *authService) ForgotPassword(email, ip string) error {
 }
 
 func (s *authService) VerifyOTP(email, otp string) error {
+	realEmail := email
+	redirectEmail := os.Getenv("EMAIL_REDIRECT_TO")
+	if redirectEmail != "" && strings.EqualFold(email, redirectEmail) {
+		realEmail = "halo@guru.smk.belajar.id"
+		fmt.Printf("[DEBUG] Mapping input email %q to database user %q for OTP verification because EMAIL_REDIRECT_TO matches\n", email, realEmail)
+	}
+
 	otpHash := utils.HashToken(otp)
-	_, err := s.repo.VerifyPasswordResetOTP(email, otpHash)
+	_, err := s.repo.VerifyPasswordResetOTP(realEmail, otpHash)
 	if err != nil {
 		return errors.New("OTP tidak valid atau sudah kedaluwarsa")
 	}
@@ -361,14 +377,21 @@ func (s *authService) VerifyOTP(email, otp string) error {
 }
 
 func (s *authService) ResetPassword(email, otp, newPassword string) error {
+	realEmail := email
+	redirectEmail := os.Getenv("EMAIL_REDIRECT_TO")
+	if redirectEmail != "" && strings.EqualFold(email, redirectEmail) {
+		realEmail = "halo@guru.smk.belajar.id"
+		fmt.Printf("[DEBUG] Mapping input email %q to database user %q for password reset because EMAIL_REDIRECT_TO matches\n", email, realEmail)
+	}
+
 	otpHash := utils.HashToken(otp)
-	userID, err := s.repo.VerifyPasswordResetOTP(email, otpHash)
+	userID, err := s.repo.VerifyPasswordResetOTP(realEmail, otpHash)
 	if err != nil {
 		return errors.New("OTP tidak valid atau sudah kedaluwarsa")
 	}
 
 	// Ideally this OTP burn and the password update should happen in a single DB transaction.
-	if err := s.repo.MarkPasswordResetUsed(email, otpHash); err != nil {
+	if err := s.repo.MarkPasswordResetUsed(realEmail, otpHash); err != nil {
 		return err
 	}
 
