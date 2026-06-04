@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -239,6 +241,9 @@ func (s *authService) IssueAdminTokens(adminUsername string) (string, string, in
 		return "", "", 0, err
 	}
 
+	loginBody := fmt.Sprintf("Anda berhasil login pada %s.", time.Now().Format("02 Jan 2006 15:04"))
+	_ = s.notificationRepo.Create(context.Background(), int64(user.ID), "login", "Login berhasil", &loginBody, nil, nil)
+
 	return accessToken, refreshToken, user.ID, nil
 }
 
@@ -313,8 +318,10 @@ func (s *authService) ForgotPassword(email, ip string) error {
 		return nil
 	}
 
-	// Generate a cryptographically-random 6-digit OTP.
-	otp := fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
+	otp, err := generateSecureOTP()
+	if err != nil {
+		return err
+	}
 	otpHash := utils.HashToken(otp)
 	expiresAt := time.Now().Add(15 * time.Minute)
 
@@ -322,11 +329,14 @@ func (s *authService) ForgotPassword(email, ip string) error {
 		return err
 	}
 
-	// Send OTP via email (falls back to console if SMTP is not configured).
-	if err := s.mailer.SendOTP(email, otp, expiresAt); err != nil {
-		// Log the error but don't fail the request — the OTP is already stored.
-		fmt.Printf("[WARN] gagal mengirim email OTP ke %s: %v\n", email, err)
-	}
+	// Send OTP asynchronously so the request returns without waiting on SMTP/TLS.
+	go func(recipient, code string, expiry time.Time) {
+		if err := s.mailer.SendOTP(recipient, code, expiry); err != nil {
+			// Log the error but don't fail the request — the OTP is already stored.
+			fmt.Printf("[WARN] gagal mengirim email OTP ke %s: %v\n", recipient, err)
+		}
+	}(email, otp, expiresAt)
+
 	return nil
 }
 
@@ -346,6 +356,11 @@ func (s *authService) ResetPassword(email, otp, newPassword string) error {
 		return errors.New("OTP tidak valid atau sudah kedaluwarsa")
 	}
 
+	// Ideally this OTP burn and the password update should happen in a single DB transaction.
+	if err := s.repo.MarkPasswordResetUsed(email, otpHash); err != nil {
+		return err
+	}
+
 	hash, err := utils.HashPassword(newPassword)
 	if err != nil {
 		return err
@@ -355,7 +370,7 @@ func (s *authService) ResetPassword(email, otp, newPassword string) error {
 		return err
 	}
 
-	return s.repo.MarkPasswordResetUsed(email, otpHash)
+	return nil
 }
 
 func (s *authService) VerifyAccessToken(accessToken string) (map[string]any, error) {
@@ -370,4 +385,12 @@ func (s *authService) VerifyAccessToken(accessToken string) (map[string]any, err
 		"role":      claims.Role,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func generateSecureOTP() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return "", fmt.Errorf("gagal membuat OTP: %w", err)
+	}
+	return fmt.Sprintf("%06d", n.Int64()), nil
 }

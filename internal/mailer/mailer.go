@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+var sendMail = smtp.SendMail
+
 // Mailer is the interface the auth service depends on.
 // Tests can swap in a mock without touching SMTP.
 type Mailer interface {
@@ -34,13 +36,19 @@ func New(cfg Config) Mailer {
 }
 
 func (m *smtpMailer) SendOTP(toEmail, otp string, expiresAt time.Time) error {
-	// Always log to console — useful during development.
-	fmt.Printf("[EMAIL-OTP] To: %s | OTP: %s | Expires: %s\n",
-		toEmail, otp, expiresAt.Format(time.RFC3339))
+	toEmail = strings.TrimSpace(toEmail)
+	otp = strings.TrimSpace(otp)
+
+	if toEmail == "" {
+		return fmt.Errorf("email tujuan OTP kosong")
+	}
+	if otp == "" {
+		return fmt.Errorf("kode OTP kosong")
+	}
 
 	// Skip actual SMTP delivery if credentials are not set.
 	if m.cfg.Sender == "" || m.cfg.Password == "" || m.cfg.Host == "" {
-		fmt.Println("[EMAIL-OTP] SMTP credentials not configured — OTP logged to console only.")
+		fmt.Printf("[EMAIL-OTP] SMTP credentials not configured - email to %s skipped.\n", toEmail)
 		return nil
 	}
 
@@ -58,7 +66,7 @@ func (m *smtpMailer) SendOTP(toEmail, otp string, expiresAt time.Time) error {
 	addr := net.JoinHostPort(m.cfg.Host, m.cfg.Port)
 	auth := smtp.PlainAuth("", m.cfg.Sender, m.cfg.Password, m.cfg.Host)
 
-	if err := smtp.SendMail(addr, auth, m.cfg.Sender, []string{toEmail}, []byte(msg)); err != nil {
+	if err := sendMail(addr, auth, m.cfg.Sender, []string{toEmail}, []byte(msg)); err != nil {
 		return fmt.Errorf("gagal mengirim email OTP: %w", err)
 	}
 	return nil
@@ -67,7 +75,7 @@ func (m *smtpMailer) SendOTP(toEmail, otp string, expiresAt time.Time) error {
 // buildOTPEmail returns a minimal HTML email body containing the OTP.
 func buildOTPEmail(toEmail, otp string, expiresAt time.Time) string {
 	// Format expiry in WIB (UTC+7)
-	loc, _ := time.LoadLocation("Asia/Jakarta")
+	loc := jakartaLocation()
 	expStr := expiresAt.In(loc).Format("02 January 2006 15:04 WIB")
 	_ = toEmail // available for personalisation if needed
 
@@ -129,6 +137,14 @@ func buildOTPEmail(toEmail, otp string, expiresAt time.Time) string {
     </td></tr>
   </table>
 </body>
-</html>`)
+	</html>`)
 	return sb.String()
+}
+
+func jakartaLocation() *time.Location {
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err == nil {
+		return loc
+	}
+	return time.FixedZone("WIB", 7*60*60)
 }

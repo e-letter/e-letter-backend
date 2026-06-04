@@ -193,7 +193,8 @@ func (r *permissionRepository) GetUserByID(userID int) (*domain.User, error) {
 		            ELSE false
 		       END as profile_completed,
 		       COALESCE(tp.created_at, sp.created_at, pp.created_at, u.created_at) as created_at,
-		       COALESCE(tp.updated_at, sp.updated_at, pp.updated_at, u.updated_at) as updated_at
+		       COALESCE(tp.updated_at, sp.updated_at, pp.updated_at, u.updated_at) as updated_at,
+		       COALESCE(tp.signature_url, sp.signature_url, pp.signature_url, NULL) as signature_url
 		FROM users u
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id

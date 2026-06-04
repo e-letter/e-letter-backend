@@ -706,8 +706,10 @@ func mapStatus(status string) string {
 	switch status {
 	case "approved":
 		return "disetujui"
-	case "rejected", "cancelled":
+	case "rejected":
 		return "ditolak"
+	case "cancelled":
+		return "dibatalkan"
 	default:
 		return "menunggu"
 	}

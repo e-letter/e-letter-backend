@@ -35,8 +35,18 @@ func NewLetterService(repo repository.LetterRepository, baseURL string) LetterSe
 }
 
 func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int, error) {
-	if req.TypeID == 0 || strings.TrimSpace(req.StartTime) == "" || strings.TrimSpace(req.EndTime) == "" {
+	if req.TypeID == 0 || strings.TrimSpace(req.StartTime) == "" {
+		return 0, errors.New("type_id dan start_time diperlukan")
+	}
+
+	// For izin-keluar (type_id=1), end_time is still required.
+	// For izin-masuk (type_id=2) and dispensasi (type_id=3), end_time is optional.
+	// If empty, default to start_time so the DB column has a valid value.
+	if req.TypeID == 1 && strings.TrimSpace(req.EndTime) == "" {
 		return 0, errors.New("type_id, start_time, dan end_time diperlukan")
+	}
+	if strings.TrimSpace(req.EndTime) == "" {
+		req.EndTime = req.StartTime
 	}
 
 	// Determine the effective date: use request_date if provided, extract from start_time, or today
@@ -59,7 +69,7 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 	if startTime == "" || endTime == "" {
 		return 0, errors.New("format waktu tidak valid (gunakan HH:MM:SS)")
 	}
-	if err := validateSchoolHours(startTime, endTime); err != nil {
+	if err := validateSchoolHours(req.TypeID, startTime, endTime); err != nil {
 		return 0, err
 	}
 
@@ -203,7 +213,9 @@ func validateNotWeekend(date string) error {
 }
 
 // validateSchoolHours checks that start and end times are within school operating hours.
-func validateSchoolHours(startTime, endTime string) error {
+// For izin-masuk (typeID=2) and dispensasi (typeID=3), only the start time is validated
+// because end_time is optional and gets defaulted to start_time.
+func validateSchoolHours(typeID int, startTime, endTime string) error {
 	parseTimeOnly := func(s string) (int, int, error) {
 		parts := strings.Split(s, ":")
 		if len(parts) < 2 {
@@ -224,18 +236,25 @@ func validateSchoolHours(startTime, endTime string) error {
 	if err != nil {
 		return err
 	}
-	endH, endM, err := parseTimeOnly(endTime)
-	if err != nil {
-		return err
-	}
 
 	startTotal := startH*60 + startM
-	endTotal := endH*60 + endM
 
 	// School hours: 07:00 (420 min) to 15:00 (900 min)
 	if startTotal < 420 || startTotal > 900 {
 		return fmt.Errorf("jam mulai (%02d:%02d) di luar jam operasional sekolah (07:00 - 15:00 WIB)", startH, startM)
 	}
+
+	// Only validate end_time and end > start for izin-keluar (typeID=1).
+	if typeID != 1 {
+		return nil
+	}
+
+	endH, endM, err := parseTimeOnly(endTime)
+	if err != nil {
+		return err
+	}
+	endTotal := endH*60 + endM
+
 	if endTotal < 420 || endTotal > 900 {
 		return fmt.Errorf("jam selesai (%02d:%02d) di luar jam operasional sekolah (07:00 - 15:00 WIB)", endH, endM)
 	}
