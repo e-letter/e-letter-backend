@@ -53,15 +53,6 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 		return 0, err
 	}
 
-	// Validate date is not a holiday
-	isHoliday, err := s.repo.IsHoliday(effectiveDate)
-	if err != nil {
-		return 0, fmt.Errorf("gagal memeriksa hari libur: %w", err)
-	}
-	if isHoliday {
-		return 0, errors.New("pengajuan tidak dapat dilakukan pada tanggal merah/hari libur")
-	}
-
 	// Extract and validate time is within school hours
 	startTime := extractTimePart(req.StartTime)
 	endTime := extractTimePart(req.EndTime)
