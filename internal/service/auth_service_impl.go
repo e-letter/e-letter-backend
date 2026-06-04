@@ -312,29 +312,40 @@ func (s *authService) Logout(refreshToken string) error {
 }
 
 func (s *authService) ForgotPassword(email, ip string) error {
+	fmt.Printf("[DEBUG] ForgotPassword called for email: %q, ip: %s\n", email, ip)
 	user, err := s.repo.GetUserByEmail(email)
-	if err != nil || user == nil {
-		// Don't reveal whether the email is registered.
+	if err != nil {
+		fmt.Printf("[DEBUG] GetUserByEmail error: %v\n", err)
 		return nil
 	}
+	if user == nil {
+		fmt.Printf("[DEBUG] GetUserByEmail returned nil user for email: %q\n", email)
+		return nil
+	}
+	emailStr := ""
+	if user.Email != nil {
+		emailStr = *user.Email
+	}
+	fmt.Printf("[DEBUG] Found user: ID=%d, Email=%s, Status=%s\n", user.ID, emailStr, user.Status)
 
 	otp, err := generateSecureOTP()
 	if err != nil {
+		fmt.Printf("[ERROR] generateSecureOTP error: %v\n", err)
 		return err
 	}
 	otpHash := utils.HashToken(otp)
 	expiresAt := time.Now().Add(15 * time.Minute)
 
 	if err := s.repo.CreatePasswordResetToken(user.ID, otpHash, expiresAt, ip); err != nil {
+		fmt.Printf("[ERROR] CreatePasswordResetToken error: %v\n", err)
 		return err
 	}
 
 	// Send OTP asynchronously so the request returns without waiting on email delivery.
 	go func(recipient, code string, expiry time.Time) {
-		if err := s.mailer.SendOTP(recipient, code, expiry); err != nil {
-			// Log the error but don't fail the request — the OTP is already stored.
-			fmt.Printf("[WARN] gagal mengirim email OTP ke %s: %v\n", recipient, err)
-		}
+		fmt.Printf("[DEBUG] goroutine started, recipient: %q, code: %q\n", recipient, code)
+		err := s.mailer.SendOTP(recipient, code, expiry)
+		fmt.Printf("[DEBUG] goroutine finished SendOTP, err: %v\n", err)
 	}(email, otp, expiresAt)
 
 	return nil

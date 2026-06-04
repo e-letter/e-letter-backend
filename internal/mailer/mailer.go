@@ -32,8 +32,9 @@ type Mailer interface {
 
 // Config holds the Resend credentials loaded from environment variables.
 type Config struct {
-	APIKey string // RESEND_API_KEY
-	Sender string // RESEND_FROM or a verified sender address
+	APIKey     string // RESEND_API_KEY
+	Sender     string // RESEND_FROM or a verified sender address
+	RedirectTo string // EMAIL_REDIRECT_TO
 }
 
 type resendMailer struct {
@@ -69,12 +70,18 @@ func (m *resendMailer) SendOTP(toEmail, otp string, expiresAt time.Time) error {
 		return nil
 	}
 
+	recipient := toEmail
+	if strings.TrimSpace(m.cfg.RedirectTo) != "" {
+		fmt.Printf("[EMAIL-OTP] Redirecting email from %s to %s\n", toEmail, m.cfg.RedirectTo)
+		recipient = strings.TrimSpace(m.cfg.RedirectTo)
+	}
+
 	subject := "Kode OTP Reset Password - E-Letter"
 	body := buildOTPEmail(toEmail, otp, expiresAt)
 
 	_, err := m.sender.Send(&resend.SendEmailRequest{
 		From:    m.cfg.Sender,
-		To:      []string{toEmail},
+		To:      []string{recipient},
 		Subject: subject,
 		Html:    body,
 	})

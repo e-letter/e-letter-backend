@@ -75,6 +75,39 @@ func TestSendOTPSendsResendMessage(t *testing.T) {
 	}
 }
 
+func TestSendOTPRedirection(t *testing.T) {
+	var captured *resend.SendEmailRequest
+
+	mailer := &resendMailer{
+		cfg: Config{
+			APIKey:     "re_test_key",
+			Sender:     "E-Letter <noreply@example.com>",
+			RedirectTo: "maulidfajar163@gmail.com",
+		},
+		sender: &stubSender{
+			sendFn: func(req *resend.SendEmailRequest) (*resend.SendEmailResponse, error) {
+				captured = req
+				return nil, nil
+			},
+		},
+	}
+
+	expiresAt := time.Date(2026, 6, 4, 14, 30, 0, 0, time.UTC)
+	if err := mailer.SendOTP("original@example.com", "123456", expiresAt); err != nil {
+		t.Fatalf("expected send to succeed, got %v", err)
+	}
+
+	if captured == nil {
+		t.Fatal("expected resend payload to be captured")
+	}
+	if len(captured.To) != 1 || captured.To[0] != "maulidfajar163@gmail.com" {
+		t.Fatalf("expected email to be redirected to maulidfajar163@gmail.com, got recipient: %#v", captured.To)
+	}
+	if !strings.Contains(captured.Html, "123456") {
+		t.Fatalf("expected OTP to be present in html, got %q", captured.Html)
+	}
+}
+
 func TestSendOTPRejectsEmptyValues(t *testing.T) {
 	mailer := &resendMailer{cfg: Config{APIKey: "re_test_key", Sender: "E-Letter <noreply@example.com>"}}
 

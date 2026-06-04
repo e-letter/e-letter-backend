@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -211,7 +212,9 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	_ = h.service.ForgotPassword(req.Email, c.ClientIP())
+	if err := h.service.ForgotPassword(req.Email, c.ClientIP()); err != nil {
+		fmt.Printf("[ERROR] ForgotPassword error: %v\n", err)
+	}
 	// Always return success to not reveal if email exists
 	response.Raw(c, http.StatusOK, gin.H{
 		"success": true,

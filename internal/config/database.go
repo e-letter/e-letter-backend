@@ -8,6 +8,27 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
+func RunAutoMigrate(db *sql.DB) {
+	tables := []string{
+		"academic_years", "activity_logs", "admin_profiles",
+		"approval_flow_templates", "classes", "class_homeroom_assignments",
+		"jwt_tokens", "letter_number_counters", "majors",
+		"major_head_assignments", "notifications", "password_reset_tokens",
+		"principal_profiles", "ref_values", "requests", "request_approvals",
+		"request_students", "request_types", "schedules", "school_config",
+		"student_class_enrollments", "student_profiles", "subjects",
+		"teacher_profiles", "teacher_roles", "teacher_subjects", "users",
+	}
+	for _, table := range tables {
+		_, err := db.Exec(fmt.Sprintf("ALTER TABLE `%s` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT", table))
+		if err != nil {
+			log.Printf("[migrate] %s: %v", table, err)
+		} else {
+			log.Printf("[migrate] %s: OK", table)
+		}
+	}
+}
+
 // NewMySQLDB connects to MariaDB/MySQL via the go-sql-driver/mysql driver.
 func NewMySQLDB(cfg *Config) *sql.DB {
 	// DSN: user:password@tcp(host:port)/dbname?params

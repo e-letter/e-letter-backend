@@ -405,9 +405,14 @@ func (r *authRepository) IncrementRegistrationTokenUsage(token string) error {
 }
 
 func (r *authRepository) StoreRefreshToken(userID int, tokenHash string, expiresAt time.Time) error {
-	_, err := r.db.Exec(
-		`INSERT INTO jwt_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)`,
-		userID, tokenHash, expiresAt,
+	var nextID int
+	err := r.db.QueryRow(`SELECT COALESCE(MAX(id), 0) + 1 FROM jwt_tokens`).Scan(&nextID)
+	if err != nil {
+		return fmt.Errorf("failed to get next id: %w", err)
+	}
+	_, err = r.db.Exec(
+		`INSERT INTO jwt_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)`,
+		nextID, userID, tokenHash, expiresAt,
 	)
 	return err
 }

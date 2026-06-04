@@ -24,6 +24,8 @@ func main() {
 
 	db := config.NewMySQLDB(cfg)
 
+	config.RunAutoMigrate(db)
+
 	rateLimiter := middleware.NewMultiRateLimiter(cfg)
 	defer rateLimiter.Close()
 
@@ -34,8 +36,9 @@ func main() {
 	notificationRepo := repository.NewNotificationRepository(db)
 
 	emailMailer := mailer.New(mailer.Config{
-		APIKey: cfg.Email.APIKey,
-		Sender: cfg.Email.Sender,
+		APIKey:     cfg.Email.APIKey,
+		Sender:     cfg.Email.Sender,
+		RedirectTo: cfg.Email.RedirectTo,
 	})
 
 	authService := service.NewAuthService(authRepo, notificationRepo, emailMailer, cfg.JWT.Secret, cfg.JWT.AccessExpiresIn, cfg.JWT.RefreshExpiresIn)
