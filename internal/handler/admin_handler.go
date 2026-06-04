@@ -825,6 +825,33 @@ func (h *AdminHandler) GetSchoolConfig(c *gin.Context) {
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": config})
 }
 
+func (h *AdminHandler) GetPrincipalConfig(c *gin.Context) {
+	var fullName, signatureURL string
+	err := h.db.QueryRow(`
+		SELECT COALESCE(pp.full_name, ''), COALESCE(pp.signature_url, '')
+		FROM principal_profiles pp
+		INNER JOIN users u ON u.id = pp.user_id
+		WHERE u.role = 'kepala_sekolah'
+		  AND u.deleted_at IS NULL
+		  AND u.status = 'active'
+		  AND pp.active = 1
+		ORDER BY pp.updated_at DESC
+		LIMIT 1
+	`).Scan(&fullName, &signatureURL)
+	if err != nil {
+		// Return empty data rather than error so the print still works
+		response.Raw(c, http.StatusOK, gin.H{
+			"success": true,
+			"data":    gin.H{"full_name": "", "signature_url": ""},
+		})
+		return
+	}
+	response.Raw(c, http.StatusOK, gin.H{
+		"success": true,
+		"data":    gin.H{"full_name": fullName, "signature_url": signatureURL},
+	})
+}
+
 func (h *AdminHandler) UpdateSchoolConfig(c *gin.Context) {
 	var body map[string]string
 	if err := c.ShouldBindJSON(&body); err != nil {

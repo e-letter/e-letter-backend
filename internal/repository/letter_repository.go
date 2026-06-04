@@ -96,13 +96,57 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 		return 0, err
 	}
 
+	// Notify each student who is the subject of the request (dispensasi from teacher).
+	// Resolve student_profiles.id -> user_id and create a notification for each.
+	var studentUserIDs []int
+	if len(req.Students) > 0 {
+		placeholders := make([]string, len(req.Students))
+		args := make([]any, len(req.Students))
+		for i, sid := range req.Students {
+			placeholders[i] = "?"
+			args[i] = sid
+		}
+		sRows, err := tx.Query(`SELECT id, user_id FROM student_profiles WHERE id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+		if err == nil {
+			for sRows.Next() {
+				var spID, suID int
+				if err := sRows.Scan(&spID, &suID); err == nil {
+					studentUserIDs = append(studentUserIDs, suID)
+				}
+			}
+			sRows.Close()
+		}
+	}
+
+	// Get teacher/requester name for notification title
+	var teacherName string
+	_ = tx.QueryRow(`SELECT full_name FROM teacher_profiles WHERE user_id = ?`, userID).Scan(&teacherName)
+	if teacherName == "" {
+		_ = tx.QueryRow(`SELECT full_name FROM principal_profiles WHERE user_id = ?`, userID).Scan(&teacherName)
+	}
+	if teacherName == "" {
+		teacherName = "Guru"
+	}
+
+	for _, suID := range studentUserIDs {
+		studentTitle := "Permohonan Dispensasi"
+		studentBody := fmt.Sprintf("Pengajuan surat dispensasi oleh %s, Status saat ini: menunggu persetujuan", teacherName)
+		if err := createNotificationTx(tx, int64(suID), "new_request", studentTitle, &studentBody, &requestID64, nil); err != nil {
+			return 0, err
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	notifyUsers := []int{userID}
+	if firstPendingApproverUserID != nil {
+		notifyUsers = append(notifyUsers, int(*firstPendingApproverUserID))
+	}
+	notifyUsers = append(notifyUsers, studentUserIDs...)
 	if r.publisher != nil {
-		r.publisher.Publish(userID, "notifications:refresh")
-		if firstPendingApproverUserID != nil {
-			r.publisher.Publish(int(*firstPendingApproverUserID), "notifications:refresh")
+		for _, uid := range notifyUsers {
+			r.publisher.Publish(uid, "notifications:refresh")
 		}
 	}
 

@@ -90,7 +90,8 @@ func (r *authRepository) GetUserByLoginIdentifiers(id string) (*domain.User, err
 		            ELSE false
 		       END as profile_completed,
 		       COALESCE(tp.created_at, sp.created_at, pp.created_at, u.created_at) as created_at,
-		       COALESCE(tp.updated_at, sp.updated_at, pp.updated_at, u.updated_at) as updated_at
+		       COALESCE(tp.updated_at, sp.updated_at, pp.updated_at, u.updated_at) as updated_at,
+		       COALESCE(tp.signature_url, sp.signature_url, pp.signature_url, NULL) as signature_url
 		FROM users u
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
@@ -156,7 +157,8 @@ func (r *authRepository) GetUserByEmail(email string) (*domain.User, error) {
 		            ELSE false
 		       END as profile_completed,
 		       COALESCE(tp.created_at, sp.created_at, pp.created_at, u.created_at) as created_at,
-		       COALESCE(tp.updated_at, sp.updated_at, pp.updated_at, u.updated_at) as updated_at
+		       COALESCE(tp.updated_at, sp.updated_at, pp.updated_at, u.updated_at) as updated_at,
+		       COALESCE(tp.signature_url, sp.signature_url, pp.signature_url, NULL) as signature_url
 		FROM users u
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
@@ -182,6 +184,7 @@ func (r *authRepository) GetUserByEmail(email string) (*domain.User, error) {
 		&user.ProfileCompleted,
 		&user.CreatedAt,
 		&user.UpdatedAt,
+		&user.SignatureURL,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -247,7 +250,8 @@ func (r *authRepository) GetUserByEmailAnyStatus(email string) (*domain.User, er
 		            ELSE false
 		       END as profile_completed,
 		       COALESCE(tp.created_at, sp.created_at, pp.created_at, u.created_at) as created_at,
-		       COALESCE(tp.updated_at, sp.updated_at, pp.updated_at, u.updated_at) as updated_at
+		       COALESCE(tp.updated_at, sp.updated_at, pp.updated_at, u.updated_at) as updated_at,
+		       COALESCE(tp.signature_url, sp.signature_url, pp.signature_url, NULL) as signature_url
 		FROM users u
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
@@ -273,6 +277,7 @@ func (r *authRepository) GetUserByEmailAnyStatus(email string) (*domain.User, er
 		&user.ProfileCompleted,
 		&user.CreatedAt,
 		&user.UpdatedAt,
+		&user.SignatureURL,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -365,7 +370,8 @@ func (r *authRepository) GetUserByID(userID int) (*domain.User, error) {
 		            ELSE false
 		       END as profile_completed,
 		       COALESCE(tp.created_at, sp.created_at, pp.created_at, u.created_at) as created_at,
-		       COALESCE(tp.updated_at, sp.updated_at, pp.updated_at, u.updated_at) as updated_at
+		       COALESCE(tp.updated_at, sp.updated_at, pp.updated_at, u.updated_at) as updated_at,
+		       COALESCE(tp.signature_url, sp.signature_url, pp.signature_url, NULL) as signature_url
 		FROM users u
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
@@ -507,6 +513,7 @@ func scanUser(row *sql.Row) (*domain.User, error) {
 		&user.ProfileCompleted,
 		&user.CreatedAt,
 		&user.UpdatedAt,
+		&user.SignatureURL,
 	); err != nil {
 		return nil, err
 	}

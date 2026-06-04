@@ -577,7 +577,16 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		return err
 	}
 
-	body := fmt.Sprintf("Permohonan Anda (%s) telah diproses. Status saat ini: %s.", requestNumber, targetStatus)
+	statusLabel := targetStatus
+	switch targetStatus {
+	case "approved":
+		statusLabel = "disetujui"
+	case "rejected":
+		statusLabel = "ditolak"
+	case "cancelled":
+		statusLabel = "dibatalkan"
+	}
+	body := fmt.Sprintf("Permohonan Anda (%s) telah diproses. Status saat ini: %s.", requestNumber, statusLabel)
 	var notifType, notifTitle string
 	switch targetStatus {
 	case "approved":
@@ -594,7 +603,15 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	if r.publisher != nil {
+		r.publisher.Publish(int(requestOwnerID), "notifications:refresh")
+	}
+
+	return nil
 }
 
 func (r *permissionRepository) ListRegistrationTokens() ([]domain.TokenRecord, error) {

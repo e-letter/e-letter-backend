@@ -51,6 +51,7 @@ func SetupRouter(
 		api.GET("/protected", authHandler.Protected)
 		api.POST("/protected", authHandler.Protected)
 		api.GET("/config/school", adminHandler.GetSchoolConfig)
+		api.GET("/config/principal", adminHandler.GetPrincipalConfig)
 
 		// Protected routes (any authenticated user)
 		protected := api.Group("/")

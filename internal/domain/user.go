@@ -18,6 +18,7 @@ type User struct {
 	ClassID              *int       `json:"class_id,omitempty"`
 	CanRequestDispensasi bool       `json:"can_request_dispensasi"`
 	ProfileCompleted     bool       `json:"profile_completed"`
+	SignatureURL         *string    `json:"signature_url,omitempty"`
 	CreatedAt            *time.Time `json:"created_at,omitempty"`
 	UpdatedAt            *time.Time `json:"updated_at,omitempty"`
 
