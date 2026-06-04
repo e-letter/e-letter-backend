@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -15,16 +16,22 @@ func RunAutoMigrate(db *sql.DB) {
 		"jwt_tokens", "letter_number_counters", "majors",
 		"major_head_assignments", "notifications", "password_reset_tokens",
 		"principal_profiles", "ref_values", "requests", "request_approvals",
+		"request_approval_delegates", "request_attachments",
 		"request_students", "request_types", "schedules", "school_config",
 		"student_class_enrollments", "student_profiles", "subjects",
 		"teacher_profiles", "teacher_roles", "teacher_subjects", "users",
 	}
 	for _, table := range tables {
-		_, err := db.Exec(fmt.Sprintf("ALTER TABLE `%s` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT", table))
-		if err != nil {
-			log.Printf("[migrate] %s: %v", table, err)
+		db.Exec(fmt.Sprintf("ALTER TABLE `%s` ADD PRIMARY KEY (`id`)", table))
+		_, aiErr := db.Exec(fmt.Sprintf("ALTER TABLE `%s` MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT", table))
+		if aiErr != nil {
+			if strings.Contains(aiErr.Error(), "1075") {
+				log.Printf("[migrate] %s AI: already set", table)
+			} else {
+				log.Printf("[migrate] %s AI: %v", table, aiErr)
+			}
 		} else {
-			log.Printf("[migrate] %s: OK", table)
+			log.Printf("[migrate] %s AI: OK", table)
 		}
 	}
 }
