@@ -105,7 +105,7 @@ func buildOTPEmail(toEmail, otp string, expiresAt time.Time) string {
         <tr>
           <td style="background:#1e40af;padding:32px 40px 24px;text-align:center;">
             <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;letter-spacing:.5px;">
-              🔐 Reset Password
+              🔐 Atur Ulang Kata Sandi
             </h1>
             <p style="margin:8px 0 0;color:#bfdbfe;font-size:13px;">SiPena · SMK Negeri 2 Singosari</p>
           </td>
