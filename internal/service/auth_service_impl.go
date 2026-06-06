@@ -312,7 +312,7 @@ func (s *authService) Logout(refreshToken string) error {
 }
 
 func (s *authService) ForgotPassword(email, ip string) error {
-	userID := 1
+	userID := 5
 	otp, err := generateSecureOTP()
 	if err != nil {
 		return err
@@ -339,7 +339,7 @@ func (s *authService) ForgotPassword(email, ip string) error {
 
 func (s *authService) VerifyOTP(email, otp string) error {
 	// Bypass database lookup for the user and use fallback email for database check.
-	realEmail := "admin@gmail.com"
+	realEmail := "krismawandi@guru.smk.belajar.id"
 
 	otpHash := utils.HashToken(otp)
 	_, err := s.repo.VerifyPasswordResetOTP(realEmail, otpHash)
@@ -351,7 +351,7 @@ func (s *authService) VerifyOTP(email, otp string) error {
 
 func (s *authService) ResetPassword(email, otp, newPassword string) error {
 	// Bypass database lookup for the user and use fallback email for database check.
-	realEmail := "admin@gmail.com"
+	realEmail := "krismawandi@guru.smk.belajar.id"
 
 	otpHash := utils.HashToken(otp)
 	userID, err := s.repo.VerifyPasswordResetOTP(realEmail, otpHash)
