@@ -63,9 +63,20 @@ func (r *permissionRepository) ListByUser(userID int, startDate, endDate string)
 	// LEFT-JOINed column in a WHERE OR can be folded into an implicit INNER JOIN by the MariaDB optimizer,
 	// which would silently drop letters whose only join is via request_students.
 	query := `
-		SELECT r.id, r.request_type_id, r.request_number, r.requester_user_id, r.reason, r.request_date, r.start_time, r.end_time, r.status, r.current_step, r.created_at, r.updated_at,
-		       COALESCE(sp_req.full_name, sp_target.full_name) AS student_name,
-		       COALESCE(c_req.class_name, c_target.class_name) AS class_name
+		SELECT r.id,
+		       ANY_VALUE(r.request_type_id) AS request_type_id,
+		       ANY_VALUE(r.request_number) AS request_number,
+		       ANY_VALUE(r.requester_user_id) AS requester_user_id,
+		       ANY_VALUE(r.reason) AS reason,
+		       ANY_VALUE(r.request_date) AS request_date,
+		       ANY_VALUE(r.start_time) AS start_time,
+		       ANY_VALUE(r.end_time) AS end_time,
+		       ANY_VALUE(r.status) AS status,
+		       ANY_VALUE(r.current_step) AS current_step,
+		       ANY_VALUE(r.created_at) AS created_at,
+		       ANY_VALUE(r.updated_at) AS updated_at,
+		       ANY_VALUE(COALESCE(sp_req.full_name, sp_target.full_name)) AS student_name,
+		       ANY_VALUE(COALESCE(c_req.class_name, c_target.class_name)) AS class_name
 		FROM requests r
 		LEFT JOIN student_profiles sp_req ON sp_req.user_id = r.requester_user_id
 		LEFT JOIN student_class_enrollments sce_req ON sce_req.student_id = sp_req.id AND sce_req.is_active = 1
@@ -78,6 +89,7 @@ func (r *permissionRepository) ListByUser(userID int, startDate, endDate string)
 		LEFT JOIN classes c_target ON c_target.id = sce_target.class_id
 		WHERE r.deleted_at IS NULL
 		  AND (r.requester_user_id = ? OR rs.request_id IS NOT NULL)
+		GROUP BY r.id
 	`
 	args := []any{userID, userID}
 	if startDate != "" {
@@ -88,7 +100,7 @@ func (r *permissionRepository) ListByUser(userID int, startDate, endDate string)
 		query += " AND r.request_date <= ?"
 		args = append(args, endDate)
 	}
-	query += " ORDER BY r.request_date DESC, r.created_at DESC"
+	query += " ORDER BY ANY_VALUE(r.request_date) DESC, ANY_VALUE(r.created_at) DESC"
 
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
@@ -761,9 +773,14 @@ func (r *permissionRepository) GetRequestDetail(requestID int) (any, error) {
 		Reason        *string `json:"reason"`
 		CurrentStep   int     `json:"current_step"`
 		CreatedAt     string  `json:"created_at"`
+		RequestDate   *string `json:"request_date,omitempty"`
+		StartTime     *string `json:"start_time,omitempty"`
+		EndTime       *string `json:"end_time,omitempty"`
 	}
-	err := r.db.QueryRow(`SELECT id, request_number, request_type_id, status, reason, current_step, created_at FROM requests WHERE id = ?`, requestID).
-		Scan(&req.ID, &req.RequestNumber, &req.TypeID, &req.Status, &req.Reason, &req.CurrentStep, &req.CreatedAt)
+	err := r.db.QueryRow(
+		`SELECT id, request_number, request_type_id, status, reason, current_step, created_at, request_date, start_time, end_time FROM requests WHERE id = ?`,
+		requestID,
+	).Scan(&req.ID, &req.RequestNumber, &req.TypeID, &req.Status, &req.Reason, &req.CurrentStep, &req.CreatedAt, &req.RequestDate, &req.StartTime, &req.EndTime)
 	if err != nil {
 		return nil, err
 	}
@@ -806,13 +823,17 @@ func (r *permissionRepository) GetRequestDetail(requestID int) (any, error) {
 
 	studentRows, err := r.db.Query(`
 		SELECT sp.id, sp.user_id, sp.full_name, sp.student_code,
-		       COALESCE(c.class_name, '-'), COALESCE(u.email, '-'),
+		       COALESCE((
+		           SELECT c.class_name FROM student_class_enrollments sce
+		           JOIN classes c ON c.id = sce.class_id
+		           WHERE sce.student_id = sp.id AND sce.is_active = 1
+		           LIMIT 1
+		       ), '-'),
+		       COALESCE(u.email, '-'),
 		       sp.signature_url
 		FROM request_students rs
 		JOIN student_profiles sp ON sp.id = rs.student_id AND sp.deleted_at IS NULL
 		JOIN users u ON u.id = sp.user_id AND u.deleted_at IS NULL
-		LEFT JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
-		LEFT JOIN classes c ON c.id = sce.class_id
 		WHERE rs.request_id = ?
 		ORDER BY sp.full_name ASC
 	`, requestID)

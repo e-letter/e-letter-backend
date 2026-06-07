@@ -650,12 +650,17 @@ func (r *letterRepository) populateStudentsForLetters(items []domain.LetterListI
 	}
 
 	query := fmt.Sprintf(`
-		SELECT rs.request_id, sp.full_name, COALESCE(c.class_name, '-'), COALESCE(sp.student_code, '-'), COALESCE(u.email, '-')
+		SELECT rs.request_id, sp.full_name,
+		       COALESCE((
+		           SELECT c.class_name FROM student_class_enrollments sce
+		           JOIN classes c ON c.id = sce.class_id
+		           WHERE sce.student_id = sp.id AND sce.is_active = 1
+		           LIMIT 1
+		       ), '-'),
+		       COALESCE(sp.student_code, '-'), COALESCE(u.email, '-')
 		FROM request_students rs
 		JOIN student_profiles sp ON sp.id = rs.student_id
 		JOIN users u ON u.id = sp.user_id
-		LEFT JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
-		LEFT JOIN classes c ON c.id = sce.class_id
 		WHERE rs.request_id IN (%s)
 	`, strings.Join(placeholders, ","))
 

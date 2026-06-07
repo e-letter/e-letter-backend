@@ -131,7 +131,9 @@ func SetupRouter(
 			admin.Use(rateLimiter.AdminRateLimiter())
 			{
 				admin.GET("/users", adminHandler.GetUsers)
+				admin.POST("/users", adminHandler.CreateUser)
 				admin.PATCH("/users/:id/status", adminHandler.UpdateUserStatus)
+				admin.PUT("/users/:id", adminHandler.UpdateUser)
 				admin.GET("/stats", adminHandler.GetStats)
 				admin.GET("/registration-tokens", adminHandler.GetRegistrationTokens)
 				admin.POST("/registration-tokens", adminHandler.CreateRegistrationToken)
@@ -161,6 +163,7 @@ func SetupRouter(
 				admin.PUT("/config/school", adminHandler.UpdateSchoolConfig)
 				admin.POST("/config/upload", adminHandler.UploadConfigImage)
 				admin.GET("/audit-logs", adminHandler.GetAuditLogs)
+				admin.DELETE("/letter-requests/:id", adminHandler.AdminDeleteLetter)
 			}
 		}
 

@@ -2,15 +2,19 @@ package handler
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Refliqx/backend-eletter/internal/response"
+	"github.com/Refliqx/backend-eletter/internal/utils"
 	"github.com/gin-gonic/gin"
+	"github.com/go-sql-driver/mysql"
 )
 
 type AdminHandler struct {
@@ -103,7 +107,461 @@ func (h *AdminHandler) UpdateUserStatus(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(
+		h.db,
+		int64(adminUserID),
+		"update_user_status",
+		fmt.Sprintf("Admin mengubah status user id=%s menjadi '%s'", id, body.Status),
+		c.ClientIP(),
+		c.GetHeader("User-Agent"),
+	)
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Status berhasil diperbarui"})
+}
+
+// knownRoles mirrors the canonical role values used across the system.
+// Keep in sync with DB role_name values.
+var knownRoles = map[string]bool{
+	"student":        true,
+	"teacher":        true,
+	"kepala_sekolah": true,
+	"admin":          true,
+}
+
+func roleProfileTable(role string) string {
+	switch role {
+	case "student":
+		return "student_profiles"
+	case "teacher":
+		return "teacher_profiles"
+	case "kepala_sekolah":
+		return "principal_profiles"
+	case "admin":
+		return "admin_profiles"
+	}
+	return ""
+}
+
+func roleProfileHasDeletedAt(role string) bool {
+	return role == "student" || role == "teacher"
+}
+
+// UpdateUser allows an admin to change a user's role and/or full_name.
+// Body: {"role": "student|teacher|kepala_sekolah|admin", "full_name": "..."} - both optional.
+// When the role changes, the existing profile (if any) for the old role is
+// soft-deleted and a new profile row is created for the new role with the
+// provided (or existing) full_name. If the new role is unchanged but a
+// full_name is supplied, the matching profile row's full_name is updated.
+func (h *AdminHandler) UpdateUser(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		response.Error(c, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	var body struct {
+		Role     *string `json:"role"`
+		FullName *string `json:"full_name"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.Role == nil && body.FullName == nil {
+		response.Error(c, http.StatusBadRequest, "Tidak ada perubahan yang dikirim")
+		return
+	}
+	if body.Role != nil && !knownRoles[*body.Role] {
+		response.Error(c, http.StatusBadRequest, "Role tidak dikenal: "+*body.Role)
+		return
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback()
+
+	// Lock the user row.
+	var currentRole string
+	var currentStatus string
+	err = tx.QueryRow(`SELECT role, status FROM users WHERE id = ? AND deleted_at IS NULL FOR UPDATE`, id).Scan(&currentRole, &currentStatus)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			response.Error(c, http.StatusNotFound, "Pengguna tidak ditemukan")
+			return
+		}
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	targetRole := currentRole
+	if body.Role != nil {
+		targetRole = *body.Role
+	}
+
+	// Update the canonical users table.
+	if body.Role != nil {
+		if _, err := tx.Exec(`UPDATE users SET role = ?, updated_at = NOW() WHERE id = ?`, *body.Role, id); err != nil {
+			response.Error(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	// Resolve the full_name to apply: explicit body value wins, else keep existing.
+	newFullName := ""
+	if body.FullName != nil {
+		newFullName = strings.TrimSpace(*body.FullName)
+	}
+	if newFullName == "" {
+		_ = tx.QueryRow(
+			fmt.Sprintf(`SELECT full_name FROM %s WHERE user_id = ? ORDER BY id DESC LIMIT 1`, roleProfileTable(currentRole)),
+			id,
+		).Scan(&newFullName)
+	}
+
+	// Soft-delete the old role's profile (if it has a profile table).
+	oldTable := roleProfileTable(currentRole)
+	if oldTable != "" && currentRole != targetRole {
+		if roleProfileHasDeletedAt(currentRole) {
+			if _, err := tx.Exec(
+				fmt.Sprintf(`UPDATE %s SET deleted_at = NOW(), active = 0, updated_at = NOW() WHERE user_id = ? AND deleted_at IS NULL`, oldTable),
+				id,
+			); err != nil {
+				response.Error(c, http.StatusInternalServerError, fmt.Sprintf("Gagal menonaktifkan profil lama: %s", err.Error()))
+				return
+			}
+		} else {
+			// admin_profiles and principal_profiles have no deleted_at; just leave them
+			// (admin may keep a parallel principal profile record even after role switch).
+		}
+	}
+
+	// Update or insert profile for the target role.
+	newTable := roleProfileTable(targetRole)
+	if newTable != "" {
+		// If the same table for the same user exists and is active, update full_name.
+		if roleProfileHasDeletedAt(targetRole) {
+			res, err := tx.Exec(
+				fmt.Sprintf(`UPDATE %s SET full_name = ?, updated_at = NOW() WHERE user_id = ? AND deleted_at IS NULL`, newTable),
+				newFullName, id,
+			)
+			if err != nil {
+				response.Error(c, http.StatusInternalServerError, err.Error())
+				return
+			}
+			affected, _ := res.RowsAffected()
+			if affected == 0 {
+				// No active profile: insert a fresh one. Default required columns to safe placeholders.
+				switch targetRole {
+				case "student":
+					if _, err := tx.Exec(
+						`INSERT INTO student_profiles (user_id, full_name, gender, active) VALUES (?, ?, 'other', 1)`,
+						id, newFullName,
+					); err != nil {
+						response.Error(c, http.StatusInternalServerError, fmt.Sprintf("Gagal membuat profil siswa: %s", err.Error()))
+						return
+					}
+				case "teacher":
+					if _, err := tx.Exec(
+						`INSERT INTO teacher_profiles (user_id, full_name, active) VALUES (?, ?, 1)`,
+						id, newFullName,
+					); err != nil {
+						response.Error(c, http.StatusInternalServerError, fmt.Sprintf("Gagal membuat profil guru: %s", err.Error()))
+						return
+					}
+				}
+			}
+		} else {
+			// admin / principal - update the most recent record; insert if none.
+			res, err := tx.Exec(
+				fmt.Sprintf(`UPDATE %s SET full_name = ?, updated_at = NOW() WHERE user_id = ?`, newTable),
+				newFullName, id,
+			)
+			if err != nil {
+				response.Error(c, http.StatusInternalServerError, err.Error())
+				return
+			}
+			affected, _ := res.RowsAffected()
+			if affected == 0 {
+				switch targetRole {
+				case "admin":
+					if _, err := tx.Exec(
+						`INSERT INTO admin_profiles (user_id, full_name) VALUES (?, ?)`,
+						id, newFullName,
+					); err != nil {
+						response.Error(c, http.StatusInternalServerError, fmt.Sprintf("Gagal membuat profil admin: %s", err.Error()))
+						return
+					}
+				case "kepala_sekolah":
+					if _, err := tx.Exec(
+						`INSERT INTO principal_profiles (user_id, full_name, active) VALUES (?, ?, 1)`,
+						id, newFullName,
+					); err != nil {
+						response.Error(c, http.StatusInternalServerError, fmt.Sprintf("Gagal membuat profil kepala sekolah: %s", err.Error()))
+						return
+					}
+				}
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	adminUserID := toIntFromContext(c, "userId")
+	descParts := []string{fmt.Sprintf("Admin memperbarui user id=%d", id)}
+	if body.Role != nil {
+		descParts = append(descParts, fmt.Sprintf("role: %s -> %s", currentRole, targetRole))
+	}
+	if body.FullName != nil {
+		descParts = append(descParts, fmt.Sprintf("nama: '%s'", *body.FullName))
+	}
+	utils.LogActivity(
+		h.db,
+		int64(adminUserID),
+		"update_user",
+		strings.Join(descParts, "; "),
+		c.ClientIP(),
+		c.GetHeader("User-Agent"),
+	)
+
+	response.Raw(c, http.StatusOK, gin.H{
+		"success": true,
+		"message": "Pengguna berhasil diperbarui",
+		"data": gin.H{
+			"id":        id,
+			"role":      targetRole,
+			"full_name": newFullName,
+			"status":    currentStatus,
+		},
+	})
+}
+
+// CreateUser lets an admin provision a new account directly (no token required).
+// Useful for the "Tambah Pengguna" UI on /admin/pengguna where the admin needs
+// to create a user without going through the public registration flow.
+func (h *AdminHandler) CreateUser(c *gin.Context) {
+	var body struct {
+		FullName string `json:"full_name" binding:"required"`
+		Email    string `json:"email" binding:"required,email"`
+		Role     string `json:"role" binding:"required"`
+		Status   string `json:"status"`
+		Password string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	role := strings.ToLower(strings.TrimSpace(body.Role))
+	if !knownRoles[role] {
+		response.Error(c, http.StatusBadRequest, "Peran tidak dikenal")
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(body.Email))
+
+	// Reject duplicates up-front so the user gets a clear message.
+	var existingID int
+	err := h.db.QueryRow(`SELECT id FROM users WHERE email = ? AND deleted_at IS NULL`, email).Scan(&existingID)
+	if err == nil {
+		response.Error(c, http.StatusConflict, "Email sudah terdaftar")
+		return
+	}
+	if err != nil && err != sql.ErrNoRows {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	status := strings.TrimSpace(body.Status)
+	if status == "" {
+		// Admin-created accounts are activated immediately; the public
+		// self-registration flow's "pending" state is for teacher onboarding only.
+		status = "active"
+	}
+	if status != "active" && status != "pending" && status != "inactive" {
+		response.Error(c, http.StatusBadRequest, "Status tidak valid")
+		return
+	}
+
+	// Default to a placeholder password — the user can change it via the
+	// "forgot password" flow, or the admin can supply one explicitly.
+	password := body.Password
+	if password == "" {
+		password = "e-letter-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	hash, err := utils.HashPassword(password)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "Gagal memproses kata sandi")
+		return
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(
+		`INSERT INTO users (email, password_hash, role, status) VALUES (?, ?, ?, ?)`,
+		email, hash, role, status,
+	)
+	if err != nil {
+		// Race condition duplicate.
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			response.Error(c, http.StatusConflict, "Email sudah terdaftar")
+			return
+		}
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	userID, _ := res.LastInsertId()
+
+	// Insert into the appropriate profile table for the role so the user is
+	// fully provisioned (consistent with the public Register flow).
+	profileTable := roleProfileTable(role)
+	if profileTable == "" {
+		response.Error(c, http.StatusBadRequest, "Peran tidak memiliki profil")
+		return
+	}
+
+	active := 0
+	if status == "active" {
+		active = 1
+	}
+
+	switch role {
+	case "student":
+		_, err = tx.Exec(
+			`INSERT INTO student_profiles (user_id, full_name, gender, active) VALUES (?, ?, 'other', ?)`,
+			userID, body.FullName, active,
+		)
+	case "teacher":
+		_, err = tx.Exec(
+			`INSERT INTO teacher_profiles (user_id, full_name, active) VALUES (?, ?, ?)`,
+			userID, body.FullName, active,
+		)
+	case "kepala_sekolah":
+		_, err = tx.Exec(
+			`INSERT INTO principal_profiles (user_id, full_name, active) VALUES (?, ?, ?)`,
+			userID, body.FullName, active,
+		)
+	case "admin":
+		_, err = tx.Exec(
+			`INSERT INTO admin_profiles (user_id, full_name) VALUES (?, ?)`,
+			userID, body.FullName,
+		)
+	}
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "Gagal membuat profil: "+err.Error())
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(
+		h.db,
+		int64(adminUserID),
+		"create_user",
+		fmt.Sprintf("Admin membuat akun baru: %s (%s) dengan role=%s, status=%s", body.FullName, email, role, status),
+		c.ClientIP(),
+		c.GetHeader("User-Agent"),
+	)
+	response.Raw(c, http.StatusCreated, gin.H{
+		"success": true,
+		"message": "Pengguna berhasil dibuat",
+		"data": gin.H{
+			"id":        userID,
+			"email":     email,
+			"role":      role,
+			"full_name": body.FullName,
+			"status":    status,
+			"password":  password,
+		},
+	})
+}
+
+// AdminDeleteLetter force-deletes any permission request, regardless of
+// ownership. Soft-delete via requests.deleted_at; only admins may call it.
+func (h *AdminHandler) AdminDeleteLetter(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		response.Error(c, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback()
+
+	// Lock and read metadata for audit + cascade decisions.
+	var requesterUserID int64
+	var requestNumber sql.NullString
+	var letterType sql.NullString
+	var status sql.NullString
+	err = tx.QueryRow(
+		`SELECT requester_user_id, request_number, letter_type, status FROM requests WHERE id = ? AND deleted_at IS NULL FOR UPDATE`,
+		id,
+	).Scan(&requesterUserID, &requestNumber, &letterType, &status)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			response.Error(c, http.StatusNotFound, "Surat tidak ditemukan atau sudah dihapus")
+			return
+		}
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if _, err := tx.Exec(`UPDATE requests SET deleted_at = NOW() WHERE id = ?`, id); err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	adminUserID := toIntFromContext(c, "userId")
+	number := "-"
+	if requestNumber.Valid {
+		number = requestNumber.String
+	}
+	utils.LogActivity(
+		h.db,
+		int64(adminUserID),
+		"admin_delete_letter",
+		fmt.Sprintf("Admin menghapus surat id=%d nomor=%s atas permintaan user_id=%d (status=%s)", id, number, requesterUserID, status.String),
+		c.ClientIP(),
+		c.GetHeader("User-Agent"),
+	)
+
+	// Best-effort SSE refresh so the affected user's UI updates.
+	// (notification_publisher would normally be injected; admin handler has
+	// access to the raw db only. We rely on clients polling or a 5s refresh.)
+
+	response.Raw(c, http.StatusOK, gin.H{
+		"success": true,
+		"message": "Surat berhasil dihapus",
+		"data": gin.H{
+			"id":                id,
+			"letter_type":       letterType.String,
+			"request_number":    number,
+			"requester_user_id": requesterUserID,
+		},
+	})
 }
 
 func (h *AdminHandler) GetRegistrationTokens(c *gin.Context) {
@@ -209,6 +667,14 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 			response.Error(c, http.StatusInternalServerError, err.Error())
 			return
 		}
+		utils.LogActivity(
+			h.db,
+			int64(adminUserID),
+			"approve_teacher_registration",
+			fmt.Sprintf("Admin menyetujui pendaftaran guru user_id=%d", userID),
+			c.ClientIP(),
+			c.GetHeader("User-Agent"),
+		)
 		response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Akun guru berhasil disetujui"})
 		return
 	}
@@ -346,6 +812,14 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	utils.LogActivity(
+		h.db,
+		int64(adminUserID),
+		"verify_teacher_role",
+		fmt.Sprintf("Admin memverifikasi peran guru: role_id=%s role_name=%s teacher_id=%d", id, roleName, teacherID),
+		c.ClientIP(),
+		c.GetHeader("User-Agent"),
+	)
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Peran guru berhasil diverifikasi dan penugasan dibuat"})
 }
 
@@ -498,6 +972,14 @@ func (h *AdminHandler) RejectTeacherRole(c *gin.Context) {
 			response.Error(c, http.StatusInternalServerError, err.Error())
 			return
 		}
+		utils.LogActivity(
+			h.db,
+			int64(adminUserID),
+			"reject_teacher_registration",
+			fmt.Sprintf("Admin menolak pendaftaran guru user_id=%d", userID),
+			c.ClientIP(),
+			c.GetHeader("User-Agent"),
+		)
 		response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Pendaftaran guru berhasil ditolak"})
 		return
 	}
@@ -514,6 +996,14 @@ func (h *AdminHandler) RejectTeacherRole(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	utils.LogActivity(
+		h.db,
+		int64(adminUserID),
+		"reject_teacher_role",
+		fmt.Sprintf("Admin menolak permintaan peran id=%s", id),
+		c.ClientIP(),
+		c.GetHeader("User-Agent"),
+	)
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Permintaan peran ditolak"})
 }
 
@@ -581,7 +1071,21 @@ func (h *AdminHandler) UpdateAcademicYear(c *gin.Context) {
 
 func (h *AdminHandler) DeleteAcademicYear(c *gin.Context) {
 	id := c.Param("id")
-	h.db.Exec(`DELETE FROM academic_years WHERE id = ?`, id)
+	res, err := h.db.Exec(`DELETE FROM academic_years WHERE id = ?`, id)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	affected, _ := res.RowsAffected()
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(
+		h.db,
+		int64(adminUserID),
+		"delete_academic_year",
+		fmt.Sprintf("Admin menghapus tahun ajaran id=%s (rows_affected=%d)", id, affected),
+		c.ClientIP(),
+		c.GetHeader("User-Agent"),
+	)
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Tahun ajaran berhasil dihapus"})
 }
 
@@ -632,7 +1136,22 @@ func (h *AdminHandler) UpdateClass(c *gin.Context) {
 }
 
 func (h *AdminHandler) DeleteClass(c *gin.Context) {
-	h.db.Exec(`DELETE FROM classes WHERE id = ?`, c.Param("id"))
+	classID := c.Param("id")
+	res, err := h.db.Exec(`DELETE FROM classes WHERE id = ?`, classID)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	affected, _ := res.RowsAffected()
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(
+		h.db,
+		int64(adminUserID),
+		"delete_class",
+		fmt.Sprintf("Admin menghapus kelas id=%s (rows_affected=%d)", classID, affected),
+		c.ClientIP(),
+		c.GetHeader("User-Agent"),
+	)
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Kelas berhasil dihapus"})
 }
 
@@ -689,7 +1208,22 @@ func (h *AdminHandler) UpdateMajor(c *gin.Context) {
 }
 
 func (h *AdminHandler) DeleteMajor(c *gin.Context) {
-	h.db.Exec(`DELETE FROM majors WHERE id = ?`, c.Param("id"))
+	majorID := c.Param("id")
+	res, err := h.db.Exec(`DELETE FROM majors WHERE id = ?`, majorID)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	affected, _ := res.RowsAffected()
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(
+		h.db,
+		int64(adminUserID),
+		"delete_major",
+		fmt.Sprintf("Admin menghapus jurusan id=%s (rows_affected=%d)", majorID, affected),
+		c.ClientIP(),
+		c.GetHeader("User-Agent"),
+	)
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Jurusan berhasil dihapus"})
 }
 
@@ -746,13 +1280,28 @@ func (h *AdminHandler) UpdateSubject(c *gin.Context) {
 }
 
 func (h *AdminHandler) DeleteSubject(c *gin.Context) {
-	h.db.Exec(`DELETE FROM subjects WHERE id = ?`, c.Param("id"))
+	subjectID := c.Param("id")
+	res, err := h.db.Exec(`DELETE FROM subjects WHERE id = ?`, subjectID)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	affected, _ := res.RowsAffected()
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(
+		h.db,
+		int64(adminUserID),
+		"delete_subject",
+		fmt.Sprintf("Admin menghapus mata pelajaran id=%s (rows_affected=%d)", subjectID, affected),
+		c.ClientIP(),
+		c.GetHeader("User-Agent"),
+	)
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Mata pelajaran berhasil dihapus"})
 }
 
 func (h *AdminHandler) GetEnrollments(c *gin.Context) {
 	classID := c.Query("class_id")
-	query := `SELECT sce.id, sce.student_id, sce.class_id, sce.academic_year_id, COALESCE(sp.full_name,'') as student_name, COALESCE(sp.student_code,'') as student_code
+	query := `SELECT sce.id, sce.student_id, sce.class_id, sce.academic_year_id, COALESCE(sp.full_name,'') as student_name, COALESCE(sp.student_code,'') as student_code, sce.promotion_note
 		FROM student_class_enrollments sce
 		JOIN student_profiles sp ON sp.id = sce.student_id
 		WHERE sce.is_active = 1`
@@ -770,17 +1319,18 @@ func (h *AdminHandler) GetEnrollments(c *gin.Context) {
 	}
 	defer rows.Close()
 	type Enrollment struct {
-		ID             int    `json:"id"`
-		StudentID      int    `json:"student_id"`
-		ClassID        int    `json:"class_id"`
-		AcademicYearID int    `json:"academic_year_id"`
-		StudentName    string `json:"student_name"`
-		StudentCode    string `json:"student_code"`
+		ID             int     `json:"id"`
+		StudentID      int     `json:"student_id"`
+		ClassID        int     `json:"class_id"`
+		AcademicYearID int     `json:"academic_year_id"`
+		StudentName    string  `json:"student_name"`
+		StudentCode    string  `json:"student_code"`
+		Notes          *string `json:"notes"`
 	}
 	var items []Enrollment
 	for rows.Next() {
 		var item Enrollment
-		rows.Scan(&item.ID, &item.StudentID, &item.ClassID, &item.AcademicYearID, &item.StudentName, &item.StudentCode)
+		rows.Scan(&item.ID, &item.StudentID, &item.ClassID, &item.AcademicYearID, &item.StudentName, &item.StudentCode, &item.Notes)
 		items = append(items, item)
 	}
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": items})
@@ -788,9 +1338,10 @@ func (h *AdminHandler) GetEnrollments(c *gin.Context) {
 
 func (h *AdminHandler) CreateEnrollment(c *gin.Context) {
 	var body struct {
-		StudentID      int `json:"student_id" binding:"required"`
-		ClassID        int `json:"class_id" binding:"required"`
-		AcademicYearID int `json:"academic_year_id"`
+		StudentID      int     `json:"student_id" binding:"required"`
+		ClassID        int     `json:"class_id" binding:"required"`
+		AcademicYearID int     `json:"academic_year_id"`
+		Notes          *string `json:"notes"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		response.Error(c, http.StatusBadRequest, err.Error())
@@ -799,13 +1350,60 @@ func (h *AdminHandler) CreateEnrollment(c *gin.Context) {
 	if body.AcademicYearID == 0 {
 		h.db.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&body.AcademicYearID)
 	}
-	h.db.Exec(`INSERT INTO student_class_enrollments (student_id, class_id, academic_year_id, is_active) VALUES (?, ?, ?, 1)`,
-		body.StudentID, body.ClassID, body.AcademicYearID)
+
+	// Normalize notes: NULL/empty-string both become nil so the column stays NULL in DB.
+	var notes *string
+	if body.Notes != nil {
+		trimmed := strings.TrimSpace(*body.Notes)
+		if trimmed != "" {
+			notes = &trimmed
+		}
+	}
+
+	// Default to the existing promotion_note column. promotion_status stays 'active'
+	// so the student is enrolled in the destination class for the target academic year.
+	_, err := h.db.Exec(
+		`INSERT INTO student_class_enrollments (student_id, class_id, academic_year_id, is_active, promotion_note) VALUES (?, ?, ?, 1, ?)`,
+		body.StudentID, body.ClassID, body.AcademicYearID, notes,
+	)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	adminUserID := toIntFromContext(c, "userId")
+	noteSummary := ""
+	if notes != nil {
+		noteSummary = *notes
+	}
+	utils.LogActivity(
+		h.db,
+		int64(adminUserID),
+		"create_enrollment",
+		fmt.Sprintf("Admin mendaftarkan student_id=%d ke class_id=%d untuk academic_year_id=%d. Catatan: %q", body.StudentID, body.ClassID, body.AcademicYearID, noteSummary),
+		c.ClientIP(),
+		c.GetHeader("User-Agent"),
+	)
 	response.Raw(c, http.StatusCreated, gin.H{"success": true, "message": "Enrollment berhasil dibuat"})
 }
 
 func (h *AdminHandler) DeleteEnrollment(c *gin.Context) {
-	h.db.Exec(`DELETE FROM student_class_enrollments WHERE id = ?`, c.Param("id"))
+	enrollmentID := c.Param("id")
+	res, err := h.db.Exec(`DELETE FROM student_class_enrollments WHERE id = ?`, enrollmentID)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	affected, _ := res.RowsAffected()
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(
+		h.db,
+		int64(adminUserID),
+		"delete_enrollment",
+		fmt.Sprintf("Admin menghapus enrollment id=%s (rows_affected=%d)", enrollmentID, affected),
+		c.ClientIP(),
+		c.GetHeader("User-Agent"),
+	)
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Enrollment berhasil dihapus"})
 }
 
@@ -975,15 +1573,50 @@ func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
 
 func (h *AdminHandler) GetAuditLogs(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if page < 1 {
+		page = 1
+	}
 	limit := 50
 	offset := (page - 1) * limit
 
+	// Optional filters: activity_type, search (matches description or user_id).
+	activityType := strings.TrimSpace(c.Query("activity_type"))
+	search := strings.TrimSpace(c.Query("search"))
+
+	var (
+		total        int
+		args         []any
+		whereClauses []string
+	)
+	if activityType != "" {
+		whereClauses = append(whereClauses, "activity_type = ?")
+		args = append(args, activityType)
+	}
+	if search != "" {
+		whereClauses = append(whereClauses, "(description LIKE ? OR CAST(user_id AS CHAR) LIKE ?)")
+		s := "%" + search + "%"
+		args = append(args, s, s)
+	}
+	whereSQL := ""
+	if len(whereClauses) > 0 {
+		whereSQL = " WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	// Total count.
+	countQuery := "SELECT COUNT(*) FROM activity_logs" + whereSQL
+	if err := h.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Page rows.
+	listArgs := append(append([]any{}, args...), limit, offset)
 	rows, err := h.db.Query(`
-		SELECT id, user_id, activity_type AS action, description AS details, ip_address, created_at 
-		FROM activity_logs 
-		ORDER BY created_at DESC 
+		SELECT id, user_id, activity_type AS action, description AS details, ip_address, user_agent, created_at
+		FROM activity_logs`+whereSQL+`
+		ORDER BY created_at DESC
 		LIMIT ? OFFSET ?
-	`, limit, offset)
+	`, listArgs...)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
@@ -995,16 +1628,27 @@ func (h *AdminHandler) GetAuditLogs(c *gin.Context) {
 		Action    string  `json:"action"`
 		Details   *string `json:"details"`
 		IPAddress *string `json:"ip_address"`
+		UserAgent *string `json:"user_agent"`
 		CreatedAt string  `json:"created_at"`
 	}
-	var logs []Log
+	logs := []Log{}
 	for rows.Next() {
 		var l Log
-		if err := rows.Scan(&l.ID, &l.UserID, &l.Action, &l.Details, &l.IPAddress, &l.CreatedAt); err != nil {
+		if err := rows.Scan(&l.ID, &l.UserID, &l.Action, &l.Details, &l.IPAddress, &l.UserAgent, &l.CreatedAt); err != nil {
 			response.Error(c, http.StatusInternalServerError, "Gagal memindai log: "+err.Error())
 			return
 		}
 		logs = append(logs, l)
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": logs})
+	totalPages := (total + limit - 1) / limit
+	response.Raw(c, http.StatusOK, gin.H{
+		"success": true,
+		"data":    logs,
+		"meta": gin.H{
+			"page":        page,
+			"limit":       limit,
+			"total":       total,
+			"total_pages": totalPages,
+		},
+	})
 }
