@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -86,6 +85,4 @@ func (h *SSEHandler) Stream(c *gin.Context) {
 			return false
 		}
 	})
-
-	fmt.Printf("[SSE] Client disconnected: userID=%d\n", userID)
 }

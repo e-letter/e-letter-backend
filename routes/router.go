@@ -90,7 +90,6 @@ func SetupRouter(
 			protected.GET("/letters/teacher", rateLimiter.ReadRateLimiter(), letterHandler.TeacherLetters)
 			protected.GET("/letters/dispensasi", rateLimiter.ReadRateLimiter(), letterHandler.GeneralDispensasi)
 			protected.GET("/letters/general/dispensasi", rateLimiter.ReadRateLimiter(), letterHandler.GeneralDispensasi)
-			protected.GET("/holidays", rateLimiter.ReadRateLimiter(), letterHandler.GetHolidays)
 			protected.GET("/letters/kepsek/pending", rateLimiter.ReadRateLimiter(), letterHandler.KepsekPending)
 			protected.GET("/letters/kepsek/stats", rateLimiter.ReadRateLimiter(), letterHandler.KepsekStats)
 

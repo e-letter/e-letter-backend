@@ -32,7 +32,7 @@ type Mailer interface {
 
 // Config holds the Resend credentials loaded from environment variables.
 type Config struct {
-	APIKey     string // RESEND_API_KEY
+	APIKey string // RESEND_API_KEY
 }
 
 type resendMailer struct {
@@ -64,7 +64,6 @@ func (m *resendMailer) SendOTP(toEmail, otp string, expiresAt time.Time) error {
 
 	// Skip actual delivery if credentials are not set.
 	if m.sender == nil {
-		fmt.Printf("[EMAIL-OTP] Resend credentials not configured - email to %s skipped.\n", toEmail)
 		return nil
 	}
 

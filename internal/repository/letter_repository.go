@@ -475,11 +475,11 @@ func (r *letterRepository) ListLettersForUser(userID int, typeKey string, page, 
 	}
 
 	rows, err := r.db.Query(`
-		SELECT r.id, rt.label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
-		       COALESCE(sp_req.full_name, sp_target.full_name, ''),
-		       COALESCE(c_req.class_name, c_target.class_name, '-'),
-		       COALESCE(sp_req.student_code, sp_target.student_code, '-'),
-		       COALESCE(u.email, '-')
+		SELECT r.id, ANY_VALUE(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
+		       ANY_VALUE(COALESCE(sp_req.full_name, sp_target.full_name, '')) AS student_name,
+		       ANY_VALUE(COALESCE(c_req.class_name, c_target.class_name, '-')) AS class_name,
+		       ANY_VALUE(COALESCE(sp_req.student_code, sp_target.student_code, '-')) AS student_code,
+		       ANY_VALUE(COALESCE(u.email, '-')) AS email
 		FROM requests r
 		JOIN request_types rt ON rt.id = r.request_type_id
 		JOIN users u ON u.id = r.requester_user_id
@@ -536,8 +536,11 @@ func (r *letterRepository) ListLettersForTeacher(typeKey string, page, limit int
 	}
 
 	rows, err := r.db.Query(`
-		SELECT r.id, rt.label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
-		       COALESCE(sp.full_name,''), COALESCE(c.class_name,'-'), COALESCE(sp.student_code,'-'), COALESCE(u.email,'-')
+		SELECT r.id, ANY_VALUE(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
+		       ANY_VALUE(COALESCE(sp.full_name,'')) AS student_name,
+		       ANY_VALUE(COALESCE(c.class_name,'-')) AS class_name,
+		       ANY_VALUE(COALESCE(sp.student_code,'-')) AS student_code,
+		       ANY_VALUE(COALESCE(u.email,'-')) AS email
 		FROM requests r
 		JOIN request_types rt ON rt.id = r.request_type_id
 		JOIN users u ON u.id = r.requester_user_id
@@ -547,8 +550,7 @@ func (r *letterRepository) ListLettersForTeacher(typeKey string, page, limit int
 		WHERE rt.code = ? AND r.deleted_at IS NULL
 		GROUP BY r.id
 		ORDER BY r.created_at DESC
-		LIMIT ? OFFSET ?
-	`, typeKey, limit, offset)
+		LIMIT ? OFFSET ?`, typeKey, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -760,8 +762,11 @@ func (r *letterRepository) ListGeneralDispensasi(userRole string, userID int, pa
 		`, scopeFilter)
 
 		selectQuery = fmt.Sprintf(`
-			SELECT r.id, rt.label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
-			       COALESCE(sp.full_name,''), COALESCE(c.class_name,'-'), COALESCE(sp.student_code,'-'), COALESCE(u.email,'-')
+			SELECT r.id, ANY_VALUE(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
+			       ANY_VALUE(COALESCE(sp.full_name,'')) AS student_name,
+			       ANY_VALUE(COALESCE(c.class_name,'-')) AS class_name,
+			       ANY_VALUE(COALESCE(sp.student_code,'-')) AS student_code,
+			       ANY_VALUE(COALESCE(u.email,'-')) AS email
 			FROM requests r
 			JOIN request_types rt ON rt.id = r.request_type_id
 			JOIN users u ON u.id = r.requester_user_id
@@ -783,8 +788,11 @@ func (r *letterRepository) ListGeneralDispensasi(userRole string, userID int, pa
 		`
 
 		selectQuery = `
-			SELECT r.id, rt.label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
-			       COALESCE(sp.full_name,''), COALESCE(c.class_name,'-'), COALESCE(sp.student_code,'-'), COALESCE(u.email,'-')
+			SELECT r.id, ANY_VALUE(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
+			       ANY_VALUE(COALESCE(sp.full_name,'')) AS student_name,
+			       ANY_VALUE(COALESCE(c.class_name,'-')) AS class_name,
+			       ANY_VALUE(COALESCE(sp.student_code,'-')) AS student_code,
+			       ANY_VALUE(COALESCE(u.email,'-')) AS email
 			FROM requests r
 			JOIN request_types rt ON rt.id = r.request_type_id
 			JOIN users u ON u.id = r.requester_user_id
@@ -892,8 +900,11 @@ func (r *letterRepository) ListLettersForTeacherScoped(userID int, typeKey strin
 	}
 
 	rows, err := r.db.Query(fmt.Sprintf(`
-		SELECT r.id, rt.label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
-		       COALESCE(sp.full_name,''), COALESCE(c.class_name,'-'), COALESCE(sp.student_code,'-'), COALESCE(u.email,'-')
+		SELECT r.id, ANY_VALUE(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
+		       ANY_VALUE(COALESCE(sp.full_name,'')) AS student_name,
+		       ANY_VALUE(COALESCE(c.class_name,'-')) AS class_name,
+		       ANY_VALUE(COALESCE(sp.student_code,'-')) AS student_code,
+		       ANY_VALUE(COALESCE(u.email,'-')) AS email
 		FROM requests r
 		JOIN request_types rt ON rt.id = r.request_type_id
 		JOIN users u ON u.id = r.requester_user_id
@@ -1019,33 +1030,4 @@ func (r *letterRepository) ListTeacherLetters(userID int, page, limit int) (*dom
 		TotalPages:  totalPages,
 		TotalItems:  totalItems,
 	}, nil
-}
-
-func (r *letterRepository) IsHoliday(date string) (bool, error) {
-	var count int
-	err := r.db.QueryRow(`SELECT COUNT(*) FROM holidays WHERE holiday_date = ?`, date).Scan(&count)
-	if err != nil {
-		return false, fmt.Errorf("check holiday: %w", err)
-	}
-	return count > 0, nil
-}
-
-func (r *letterRepository) GetHolidays(year int) ([]domain.Holiday, error) {
-	rows, err := r.db.Query(`SELECT holiday_date, description FROM holidays WHERE YEAR(holiday_date) = ? ORDER BY holiday_date`, year)
-	if err != nil {
-		return nil, fmt.Errorf("get holidays: %w", err)
-	}
-	defer rows.Close()
-
-	var holidays []domain.Holiday
-	for rows.Next() {
-		var h domain.Holiday
-		var d string
-		if err := rows.Scan(&d, &h.Description); err != nil {
-			return nil, fmt.Errorf("scan holiday: %w", err)
-		}
-		h.Date = d
-		holidays = append(holidays, h)
-	}
-	return holidays, rows.Err()
 }

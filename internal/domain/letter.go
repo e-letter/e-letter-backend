@@ -52,11 +52,6 @@ type TeacherRole struct {
 	RoleName string
 }
 
-type Holiday struct {
-	Date        string `json:"date"`
-	Description string `json:"description"`
-}
-
 type LetterRepository interface {
 	CreateLetter(userID int, req LetterCreateRequest) (int, error)
 	ListLettersForUser(userID int, typeKey string, page, limit int) (*PaginatedLetterResponse, error)
@@ -67,8 +62,6 @@ type LetterRepository interface {
 	ListPendingForTeacher(userID int, page, limit int) (*PaginatedLetterResponse, error)
 	GetTeacherActiveRoles(userID int) ([]TeacherRole, error)
 	IsActivePrincipal(userID int) (bool, error)
-	IsHoliday(date string) (bool, error)
-	GetHolidays(year int) ([]Holiday, error)
 }
 
 type LetterService interface {

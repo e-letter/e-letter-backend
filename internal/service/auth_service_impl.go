@@ -321,17 +321,13 @@ func (s *authService) ForgotPassword(email, ip string) error {
 	expiresAt := time.Now().Add(5 * time.Minute)
 
 	if err := s.repo.CreatePasswordResetToken(userID, otpHash, expiresAt, ip); err != nil {
-		fmt.Printf("[ERROR] CreatePasswordResetToken error: %v\n", err)
 		return err
 	}
 
 	// Send OTP asynchronously so the request returns without waiting on email delivery.
 	// Note: We send to the real email input by the user.
 	go func(recipient, code string, expiry time.Time) {
-		err := s.mailer.SendOTP(recipient, code, expiry)
-		if err != nil {
-			fmt.Printf("[ERROR] SendOTP failed: %v\n", err)
-		}
+		_ = s.mailer.SendOTP(recipient, code, expiry)
 	}(email, otp, expiresAt)
 
 	return nil

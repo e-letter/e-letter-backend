@@ -356,27 +356,3 @@ func (h *LetterHandler) TeacherStats(c *gin.Context) {
 	}
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": stats})
 }
-
-func (h *LetterHandler) GetHolidays(c *gin.Context) {
-	rows, err := h.db.Query(`SELECT DATE_FORMAT(holiday_date, '%Y-%m-%d'), description FROM holidays ORDER BY holiday_date`)
-	if err != nil {
-		response.Error(c, http.StatusInternalServerError, "Gagal memuat data hari libur")
-		return
-	}
-	defer rows.Close()
-
-	type holidayItem struct {
-		Date        string `json:"date"`
-		Description string `json:"description"`
-	}
-
-	var holidays []holidayItem
-	for rows.Next() {
-		var item holidayItem
-		if err := rows.Scan(&item.Date, &item.Description); err != nil {
-			continue
-		}
-		holidays = append(holidays, item)
-	}
-	response.Success(c, http.StatusOK, "", holidays)
-}
