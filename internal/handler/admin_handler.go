@@ -138,6 +138,8 @@ func roleProfileTable(role string) string {
 		return "principal_profiles"
 	case "admin":
 		return "admin_profiles"
+	case "tu":
+		return "tu_profiles"
 	}
 	return ""
 }
@@ -651,6 +653,8 @@ func (h *AdminHandler) CreateRegistrationToken(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(adminUserID), "create_registration_token", "Admin membuat token registrasi: "+body.Token, c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusCreated, gin.H{"success": true, "message": "Token berhasil dibuat"})
 }
 
@@ -661,6 +665,8 @@ func (h *AdminHandler) DeleteRegistrationToken(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(adminUserID), "delete_registration_token", "Admin menghapus token registrasi id="+id, c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Token berhasil dihapus"})
 }
 
@@ -1087,6 +1093,8 @@ func (h *AdminHandler) CreateAcademicYear(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(adminUserID), "create_academic_year", "Admin membuat tahun ajaran: "+body.Name, c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusCreated, gin.H{"success": true, "message": "Tahun ajaran berhasil dibuat"})
 }
 
@@ -1107,6 +1115,8 @@ func (h *AdminHandler) UpdateAcademicYear(c *gin.Context) {
 	}
 	h.db.Exec(`UPDATE academic_years SET name = COALESCE(?, name), is_active = COALESCE(?, is_active), start_date = COALESCE(?, start_date), end_date = COALESCE(?, end_date) WHERE id = ?`,
 		body.Name, body.IsActive, body.StartDate, body.EndDate, id)
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(adminUserID), "update_academic_year", "Admin memperbarui tahun ajaran id="+id, c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Tahun ajaran berhasil diperbarui"})
 }
 
@@ -1162,6 +1172,8 @@ func (h *AdminHandler) CreateClass(c *gin.Context) {
 		return
 	}
 	h.db.Exec(`INSERT INTO classes (class_name, major_id) VALUES (?, ?)`, body.ClassName, body.MajorID)
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(adminUserID), "create_class", "Admin membuat kelas: "+body.ClassName, c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusCreated, gin.H{"success": true, "message": "Kelas berhasil dibuat"})
 }
 
@@ -1173,6 +1185,8 @@ func (h *AdminHandler) UpdateClass(c *gin.Context) {
 	}
 	c.ShouldBindJSON(&body)
 	h.db.Exec(`UPDATE classes SET class_name = ?, major_id = ? WHERE id = ?`, body.ClassName, body.MajorID, id)
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(adminUserID), "update_class", "Admin memperbarui kelas id="+id, c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Kelas berhasil diperbarui"})
 }
 
@@ -1231,6 +1245,8 @@ func (h *AdminHandler) CreateMajor(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(adminUserID), "create_major", "Admin membuat jurusan: "+body.MajorName, c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusCreated, gin.H{"success": true, "message": "Jurusan berhasil dibuat"})
 }
 
@@ -1245,6 +1261,8 @@ func (h *AdminHandler) UpdateMajor(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(adminUserID), "update_major", "Admin memperbarui jurusan id="+c.Param("id"), c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Jurusan berhasil diperbarui"})
 }
 
@@ -1303,6 +1321,8 @@ func (h *AdminHandler) CreateSubject(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(adminUserID), "create_subject", "Admin membuat mata pelajaran: "+body.SubjectName, c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusCreated, gin.H{"success": true, "message": "Mata pelajaran berhasil dibuat"})
 }
 
@@ -1317,6 +1337,8 @@ func (h *AdminHandler) UpdateSubject(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(adminUserID), "update_subject", "Admin memperbarui mata pelajaran id="+c.Param("id"), c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Mata pelajaran berhasil diperbarui"})
 }
 
@@ -1500,6 +1522,8 @@ func (h *AdminHandler) UpdateSchoolConfig(c *gin.Context) {
 	for k, v := range body {
 		h.db.Exec(`INSERT INTO school_config (config_key, config_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE config_value = ?`, k, v, v)
 	}
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(adminUserID), "update_school_config", "Admin memperbarui konfigurasi sekolah", c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Konfigurasi berhasil diperbarui"})
 }
 
@@ -1602,6 +1626,8 @@ func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
 		return
 	}
 
+	adminUserID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(adminUserID), "upload_config_image", "Admin mengunggah gambar: "+configKey, c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{
 		"success": true,
 		"message": "File berhasil diunggah",

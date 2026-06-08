@@ -1,26 +1,30 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Refliqx/backend-eletter/internal/domain"
 	"github.com/Refliqx/backend-eletter/internal/response"
 	"github.com/Refliqx/backend-eletter/internal/service"
+	"github.com/Refliqx/backend-eletter/internal/utils"
 	"github.com/gin-gonic/gin"
 )
 
 type UserProfileHandler struct {
 	service service.UserProfileService
 	baseURL string
+	db      *sql.DB
 }
 
-func NewUserProfileHandler(s service.UserProfileService, baseURL string) *UserProfileHandler {
-	return &UserProfileHandler{service: s, baseURL: baseURL}
+func NewUserProfileHandler(s service.UserProfileService, baseURL string, db *sql.DB) *UserProfileHandler {
+	return &UserProfileHandler{service: s, baseURL: baseURL, db: db}
 }
 
 func (h *UserProfileHandler) GetProfile(c *gin.Context) {
@@ -73,6 +77,7 @@ func (h *UserProfileHandler) UpdateProfile(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	utils.LogActivity(h.db, int64(userID), "update_profile", "Pembaruan profil user ID #"+strconv.Itoa(userID), c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": user})
 }
 
@@ -150,6 +155,7 @@ func (h *UserProfileHandler) UploadSignature(c *gin.Context) {
 
 	// Build the public URL for this signature file.
 	signatureURL := strings.TrimRight(h.baseURL, "/") + "/signatures/" + filename
+	utils.LogActivity(h.db, int64(userID), "upload_signature", "Unggah tanda tangan user ID #"+strconv.Itoa(userID), c.ClientIP(), c.Request.UserAgent())
 	response.Success(c, http.StatusOK, "Tanda tangan berhasil disimpan", gin.H{"signature_url": signatureURL})
 }
 
@@ -186,6 +192,7 @@ func (h *UserProfileHandler) CompleteOnboarding(c *gin.Context) {
 			return
 		}
 
+		utils.LogActivity(h.db, int64(userID), "complete_onboarding", "Onboarding guru selesai user ID #"+strconv.Itoa(userID), c.ClientIP(), c.Request.UserAgent())
 		response.Success(c, http.StatusOK, "Onboarding guru berhasil diselesaikan", gin.H{
 			"userId":           updatedUser.ID,
 			"profileCompleted": updatedUser.ProfileCompleted,
@@ -231,6 +238,7 @@ func (h *UserProfileHandler) CompleteOnboarding(c *gin.Context) {
 		return
 	}
 
+	utils.LogActivity(h.db, int64(userID), "complete_onboarding", "Onboarding selesai user ID #"+strconv.Itoa(userID), c.ClientIP(), c.Request.UserAgent())
 	response.Success(c, http.StatusOK, "Onboarding berhasil diselesaikan", gin.H{
 		"userId":           updatedUser.ID,
 		"profileCompleted": updatedUser.ProfileCompleted,

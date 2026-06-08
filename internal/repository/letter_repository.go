@@ -47,6 +47,10 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 		return 0, err
 	}
 
+	if err := ValidateRefValue(tx, "request_status", "pending"); err != nil {
+		return 0, err
+	}
+
 	res, err := tx.Exec(
 		`INSERT INTO requests (request_number, academic_year_id, request_type_id, requester_user_id, reason, start_time, end_time, request_date, submitted_at, status, current_step)
 		 VALUES (?,?,?,?,?,?,?,?,NOW(),'pending',1)`,

@@ -51,20 +51,55 @@ func RunAutoMigrate(db *sql.DB) {
 		}
 		// Disable GIPK at session level on this dedicated connection.
 		conn.ExecContext(ctx, "SET SESSION sql_generate_invisible_primary_key = OFF")
-		// Check if GIPK (my_row_id) exists — if so, drop it first.
+
+		// Determine the correct ALTER TABLE strategy:
+		//   1) id is already PK → just add AUTO_INCREMENT
+		//   2) GIPK my_row_id exists → single ALTER: drop it, add PK+AI on id
+		//   3) Other PK exists → drop it, add PK+AI on id
+		//   4) No PK → add PK+AI on id
+		var idIsPK int
+		conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'id' AND COLUMN_KEY = 'PRI'", table).Scan(&idIsPK)
+		if idIsPK > 0 {
+			_, execErr := conn.ExecContext(ctx, fmt.Sprintf("ALTER TABLE `%s` MODIFY `id` %s %s AUTO_INCREMENT", table, colType.String, nullStr))
+			if execErr != nil {
+				log.Printf("[migrate] %s AI: FAILED (modify only) — %v", table, execErr)
+			} else {
+				log.Printf("[migrate] %s AI: OK (was PK, added AI)", table)
+			}
+			conn.Close()
+			continue
+		}
+
 		var gipkCol sql.NullString
 		conn.QueryRowContext(ctx, "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'my_row_id'", table).Scan(&gipkCol)
 		if gipkCol.Valid {
-			log.Printf("[migrate] %s dropping GIPK my_row_id", table)
-			conn.ExecContext(ctx, fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `my_row_id`", table))
+			log.Printf("[migrate] %s GIPK my_row_id detected, replacing", table)
+			_, execErr := conn.ExecContext(ctx, fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `my_row_id`, ADD PRIMARY KEY (`id`), MODIFY `id` %s %s AUTO_INCREMENT", table, colType.String, nullStr))
+			if execErr != nil {
+				log.Printf("[migrate] %s AI: FAILED (GIPK) — %v", table, execErr)
+			} else {
+				log.Printf("[migrate] %s AI: OK (GIPK replaced, PK+AI added)", table)
+			}
+			conn.Close()
+			continue
 		}
-		_, execErr := conn.ExecContext(ctx, fmt.Sprintf("ALTER TABLE `%s` ADD PRIMARY KEY (`id`), MODIFY `id` %s %s AUTO_INCREMENT", table, colType.String, nullStr))
-		conn.Close()
+
+		// No PK on id and no GIPK — check for any other PK
+		var otherPKExists int
+		conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_KEY = 'PRI'", table).Scan(&otherPKExists)
+		var alterSQL string
+		if otherPKExists > 0 {
+			alterSQL = fmt.Sprintf("ALTER TABLE `%s` DROP PRIMARY KEY, ADD PRIMARY KEY (`id`), MODIFY `id` %s %s AUTO_INCREMENT", table, colType.String, nullStr)
+		} else {
+			alterSQL = fmt.Sprintf("ALTER TABLE `%s` ADD PRIMARY KEY (`id`), MODIFY `id` %s %s AUTO_INCREMENT", table, colType.String, nullStr)
+		}
+		_, execErr := conn.ExecContext(ctx, alterSQL)
 		if execErr != nil {
 			log.Printf("[migrate] %s AI: FAILED — %v", table, execErr)
 		} else {
 			log.Printf("[migrate] %s AI: OK (PK+AI added)", table)
 		}
+		conn.Close()
 	}
 }
 

@@ -258,13 +258,9 @@ func (r *notificationRepository) buildVirtualNotification(userID int64, v virtua
 }
 
 func (r *notificationRepository) Create(ctx context.Context, userID int64, notifType, title string, body *string, requestID, approvalID *int64) error {
-	// Ensure the notification type exists in ref_values so the DB trigger
-	// trg_notifications_validate_type doesn't reject the INSERT.
-	_, _ = r.db.ExecContext(ctx,
-		`INSERT IGNORE INTO ref_values (group_key, value, label, description, color, icon, sort_order, is_active)
-		 VALUES ('notification_type', ?, ?, 'Auto-registered notification type', 'blue', 'bell', 99, 1)`,
-		notifType, title,
-	)
+	if err := ValidateRefValue(r.db, "notification_type", notifType); err != nil {
+		return err
+	}
 
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO notifications (user_id, request_id, approval_id, type, title, body)
@@ -275,12 +271,9 @@ func (r *notificationRepository) Create(ctx context.Context, userID int64, notif
 }
 
 func createNotificationTx(tx *sql.Tx, userID int64, notifType, title string, body *string, requestID, approvalID *int64) error {
-	// Same auto-registration for the transactional path.
-	_, _ = tx.Exec(
-		`INSERT IGNORE INTO ref_values (group_key, value, label, description, color, icon, sort_order, is_active)
-		 VALUES ('notification_type', ?, ?, 'Auto-registered notification type', 'blue', 'bell', 99, 1)`,
-		notifType, title,
-	)
+	if err := ValidateRefValue(tx, "notification_type", notifType); err != nil {
+		return err
+	}
 
 	_, err := tx.Exec(
 		`INSERT INTO notifications (user_id, request_id, approval_id, type, title, body)

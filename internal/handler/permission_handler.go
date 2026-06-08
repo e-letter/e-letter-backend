@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"net/http"
 	"strconv"
 	"time"
@@ -8,16 +9,18 @@ import (
 	"github.com/Refliqx/backend-eletter/internal/domain"
 	"github.com/Refliqx/backend-eletter/internal/response"
 	"github.com/Refliqx/backend-eletter/internal/service"
+	"github.com/Refliqx/backend-eletter/internal/utils"
 	"github.com/gin-gonic/gin"
 )
 
 type PermissionHandler struct {
 	service service.PermissionService
 	isDev   bool
+	db      *sql.DB
 }
 
-func NewPermissionHandler(s service.PermissionService, isDev bool) *PermissionHandler {
-	return &PermissionHandler{service: s, isDev: isDev}
+func NewPermissionHandler(s service.PermissionService, isDev bool, db *sql.DB) *PermissionHandler {
+	return &PermissionHandler{service: s, isDev: isDev, db: db}
 }
 
 func (h *PermissionHandler) GetRequests(c *gin.Context) {
@@ -66,6 +69,8 @@ func (h *PermissionHandler) CreateRequest(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "Failed to create request: "+err.Error())
 		return
 	}
+	userID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(userID), "create_request", "Pengajuan permohonan baru ID #"+strconv.Itoa(id), c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusCreated, gin.H{"success": true, "data": gin.H{"request_id": id}})
 }
 
@@ -115,6 +120,7 @@ func (h *PermissionHandler) Approve(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "Failed to process approval: "+err.Error())
 		return
 	}
+	utils.LogActivity(h.db, int64(userID), "approve_"+req.Status, "Permohonan #"+strconv.Itoa(req.RequestID)+" status: "+req.Status, c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Request processed successfully"})
 }
 
@@ -185,6 +191,7 @@ func (h *PermissionHandler) CancelRequest(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	utils.LogActivity(h.db, int64(userID), "cancel_request", "Pembatalan permohonan #"+strconv.Itoa(id), c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Permintaan berhasil dibatalkan"})
 }
 
@@ -235,6 +242,7 @@ func (h *PermissionHandler) RequestTeacherRole(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	utils.LogActivity(h.db, int64(userID), "request_teacher_role", "Permintaan peran guru: "+body.RoleName, c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusCreated, gin.H{"success": true, "message": "Permintaan peran berhasil diajukan"})
 }
 
@@ -254,6 +262,7 @@ func (h *PermissionHandler) CreateDelegation(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	utils.LogActivity(h.db, int64(userID), "create_delegation", "Delegasi ke user ID #"+strconv.Itoa(body.DelegateUserID), c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusCreated, gin.H{"success": true, "message": "Delegasi berhasil dibuat"})
 }
 
@@ -275,5 +284,6 @@ func (h *PermissionHandler) DeleteDelegation(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	utils.LogActivity(h.db, int64(userID), "delete_delegation", "Hapus delegasi ID #"+strconv.Itoa(id), c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Delegasi berhasil dihapus"})
 }

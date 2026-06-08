@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"os"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/Refliqx/backend-eletter/internal/domain"
 	"github.com/Refliqx/backend-eletter/internal/response"
 	"github.com/Refliqx/backend-eletter/internal/service"
+	"github.com/Refliqx/backend-eletter/internal/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -22,10 +24,11 @@ type AuthHandler struct {
 	service     service.AuthService
 	cfg         *config.Config
 	rateLimiter RateLimiter
+	db          *sql.DB
 }
 
-func NewAuthHandler(s service.AuthService, cfg *config.Config, rl RateLimiter) *AuthHandler {
-	return &AuthHandler{service: s, cfg: cfg, rateLimiter: rl}
+func NewAuthHandler(s service.AuthService, cfg *config.Config, rl RateLimiter, db *sql.DB) *AuthHandler {
+	return &AuthHandler{service: s, cfg: cfg, rateLimiter: rl, db: db}
 }
 
 func setRefreshCookie(c *gin.Context, value string, maxAge int) {
@@ -55,6 +58,8 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
+	utils.LogActivity(h.db, 0, "register", "Registrasi pengguna baru: "+req.Email, c.ClientIP(), c.Request.UserAgent())
+
 	response.Raw(c, http.StatusCreated, gin.H{
 		"success": true,
 		"data":    gin.H{"id": userID, "login_code": loginCode, "user_code": loginCode},
@@ -83,6 +88,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	setRefreshCookie(c, refreshToken, 30*24*60*60)
+
+	utils.LogActivity(h.db, int64(user.ID), "login", "Login: "+user.Email, c.ClientIP(), c.Request.UserAgent())
+
 	response.Raw(c, http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
@@ -184,6 +192,8 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	refreshToken, _ := c.Cookie("refreshToken")
 	_ = h.service.Logout(refreshToken)
 	setRefreshCookie(c, "", -1)
+	userID := toIntFromContext(c, "userId")
+	utils.LogActivity(h.db, int64(userID), "logout", "Logout", c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Logout berhasil"})
 }
 
@@ -252,5 +262,6 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 
+	utils.LogActivity(h.db, 0, "reset_password", "Perubahan kata sandi: "+req.Email, c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Kata sandi berhasil diubah"})
 }

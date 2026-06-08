@@ -10,6 +10,7 @@ import (
 	"github.com/Refliqx/backend-eletter/internal/domain"
 	"github.com/Refliqx/backend-eletter/internal/response"
 	"github.com/Refliqx/backend-eletter/internal/service"
+	"github.com/Refliqx/backend-eletter/internal/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -235,6 +236,7 @@ func (h *LetterHandler) create(c *gin.Context) {
 		response.Raw(c, http.StatusInternalServerError, gin.H{"success": false, "error": "Gagal membuat surat: " + err.Error()})
 		return
 	}
+	utils.LogActivity(h.db, int64(userID), "create_letter", "Pembuatan surat baru ID #"+strconv.Itoa(id), c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusCreated, gin.H{"success": true, "data": gin.H{"request_id": id}})
 }
 
