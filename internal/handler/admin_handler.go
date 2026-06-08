@@ -102,6 +102,11 @@ func (h *AdminHandler) UpdateUserStatus(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	var statusExists int
+	if err := h.db.QueryRow(`SELECT 1 FROM ref_values WHERE group_key = 'user_status' AND value = ? AND is_active = 1`, body.Status).Scan(&statusExists); err == sql.ErrNoRows {
+		response.Error(c, http.StatusBadRequest, "Status pengguna tidak valid")
+		return
+	}
 	_, err := h.db.Exec(`UPDATE users SET status = ? WHERE id = ?`, body.Status, id)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
@@ -297,6 +302,15 @@ func (h *AdminHandler) UpdateUser(c *gin.Context) {
 						return
 					}
 				case "kepala_sekolah":
+					var activeCount int
+					if err := tx.QueryRow(`SELECT COUNT(*) FROM principal_profiles WHERE active = 1`).Scan(&activeCount); err != nil {
+						response.Error(c, http.StatusInternalServerError, err.Error())
+						return
+					}
+					if activeCount > 0 {
+						response.Error(c, http.StatusBadRequest, "Sudah ada kepala sekolah aktif. Nonaktifkan yang lama sebelum menambah yang baru.")
+						return
+					}
 					if _, err := tx.Exec(
 						`INSERT INTO principal_profiles (user_id, full_name, active) VALUES (?, ?, 1)`,
 						id, newFullName,
@@ -464,6 +478,18 @@ func (h *AdminHandler) CreateUser(c *gin.Context) {
 	active := 0
 	if status == "active" {
 		active = 1
+	}
+
+	if role == "kepala_sekolah" && active == 1 {
+		var activeCount int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM principal_profiles WHERE active = 1`).Scan(&activeCount); err != nil {
+			response.Error(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if activeCount > 0 {
+			response.Error(c, http.StatusBadRequest, "Sudah ada kepala sekolah aktif. Nonaktifkan yang lama sebelum menambah yang baru.")
+			return
+		}
 	}
 
 	switch role {
@@ -1643,7 +1669,10 @@ func (h *AdminHandler) GetAuditLogs(c *gin.Context) {
 	if page < 1 {
 		page = 1
 	}
-	limit := 50
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if limit < 1 {
+		limit = 50
+	}
 	offset := (page - 1) * limit
 
 	// Optional filters: activity_type, search (matches description or user_id).
@@ -1698,13 +1727,17 @@ func (h *AdminHandler) GetAuditLogs(c *gin.Context) {
 		UserAgent *string `json:"user_agent"`
 		CreatedAt string  `json:"created_at"`
 	}
+	wib := time.FixedZone("WIB", 7*60*60)
 	logs := []Log{}
 	for rows.Next() {
 		var l Log
-		if err := rows.Scan(&l.ID, &l.UserID, &l.Action, &l.Details, &l.IPAddress, &l.UserAgent, &l.CreatedAt); err != nil {
+		var createdAt time.Time
+		if err := rows.Scan(&l.ID, &l.UserID, &l.Action, &l.Details, &l.IPAddress, &l.UserAgent, &createdAt); err != nil {
 			response.Error(c, http.StatusInternalServerError, "Gagal memindai log: "+err.Error())
 			return
 		}
+		createdAt = createdAt.In(wib)
+		l.CreatedAt = createdAt.Format(time.RFC3339)
 		logs = append(logs, l)
 	}
 	totalPages := (total + limit - 1) / limit

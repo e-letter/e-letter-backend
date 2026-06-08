@@ -107,7 +107,7 @@ func RunAutoMigrate(db *sql.DB) {
 func NewMySQLDB(cfg *Config) *sql.DB {
 	// DSN: user:password@tcp(host:port)/dbname?params
 	dsn := fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Asia%%2FJakarta&charset=utf8mb4&collation=utf8mb4_unicode_ci",
+		"%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Asia%%2FJakarta&time_zone=%%27%%2B07%%3A00%%27&charset=utf8mb4&collation=utf8mb4_unicode_ci",
 		cfg.DB.User,
 		cfg.DB.Password,
 		cfg.DB.Host,

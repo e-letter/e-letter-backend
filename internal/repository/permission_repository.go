@@ -64,19 +64,19 @@ func (r *permissionRepository) ListByUser(userID int, startDate, endDate string)
 	// which would silently drop letters whose only join is via request_students.
 	query := `
 		SELECT r.id,
-		       ANY_VALUE(r.request_type_id) AS request_type_id,
-		       ANY_VALUE(r.request_number) AS request_number,
-		       ANY_VALUE(r.requester_user_id) AS requester_user_id,
-		       ANY_VALUE(r.reason) AS reason,
-		       ANY_VALUE(r.request_date) AS request_date,
-		       ANY_VALUE(r.start_time) AS start_time,
-		       ANY_VALUE(r.end_time) AS end_time,
-		       ANY_VALUE(r.status) AS status,
-		       ANY_VALUE(r.current_step) AS current_step,
-		       ANY_VALUE(r.created_at) AS created_at,
-		       ANY_VALUE(r.updated_at) AS updated_at,
-		       ANY_VALUE(COALESCE(sp_req.full_name, sp_target.full_name)) AS student_name,
-		       ANY_VALUE(COALESCE(c_req.class_name, c_target.class_name)) AS class_name
+		       MAX(r.request_type_id) AS request_type_id,
+		       MAX(r.request_number) AS request_number,
+		       MAX(r.requester_user_id) AS requester_user_id,
+		       MAX(r.reason) AS reason,
+		       MAX(r.request_date) AS request_date,
+		       MAX(r.start_time) AS start_time,
+		       MAX(r.end_time) AS end_time,
+		       MAX(r.status) AS status,
+		       MAX(r.current_step) AS current_step,
+		       MAX(r.created_at) AS created_at,
+		       MAX(r.updated_at) AS updated_at,
+		       MAX(COALESCE(sp_req.full_name, sp_target.full_name)) AS student_name,
+		       MAX(COALESCE(c_req.class_name, c_target.class_name)) AS class_name
 		FROM requests r
 		LEFT JOIN student_profiles sp_req ON sp_req.user_id = r.requester_user_id
 		LEFT JOIN student_class_enrollments sce_req ON sce_req.student_id = sp_req.id AND sce_req.is_active = 1
@@ -100,10 +100,11 @@ func (r *permissionRepository) ListByUser(userID int, startDate, endDate string)
 		query += " AND r.request_date <= ?"
 		args = append(args, endDate)
 	}
-	query += " ORDER BY ANY_VALUE(r.request_date) DESC, ANY_VALUE(r.created_at) DESC"
+	query += " ORDER BY MAX(r.request_date) DESC, MAX(r.created_at) DESC"
 
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
+		println("[DEBUG] ListByUser query error:", err.Error())
 		return nil, err
 	}
 	defer rows.Close()
@@ -224,6 +225,10 @@ func (r *permissionRepository) Create(req domain.CreatePermissionRequest) (int, 
 
 	requestNumber, academicYearID, err := generateRequestNumber(tx, req.TypeID, r.schoolCode)
 	if err != nil {
+		return 0, err
+	}
+
+	if err := ValidateRefValue(tx, "request_status", "pending"); err != nil {
 		return 0, err
 	}
 
@@ -375,6 +380,10 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 	var delegatedFromVal *int64
 	if isDelegated {
 		delegatedFromVal = &delegatedFromID
+	}
+
+	if err := ValidateRefValue(tx, "approval_status", req.Status); err != nil {
+		return err
 	}
 
 	res, err := tx.Exec(
@@ -580,6 +589,10 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		}
 	}
 
+	if err := ValidateRefValue(tx, "request_status", targetStatus); err != nil {
+		return err
+	}
+
 	if _, err := tx.Exec(`UPDATE requests SET status = ?, current_step = ?, updated_at = NOW() WHERE id = ?`, targetStatus, currentStep, req.RequestID); err != nil {
 		return err
 	}
@@ -699,15 +712,17 @@ func scanPermissionRequests(rows *sql.Rows) ([]domain.PermissionRequest, error) 
 	out := make([]domain.PermissionRequest, 0)
 	for rows.Next() {
 		var req domain.PermissionRequest
+		var reqDate sql.NullTime
+		var startRaw, endRaw any
 		if err := rows.Scan(
 			&req.RequestID,
 			&req.TypeID,
 			&req.RequestNumber,
 			&req.RequesterUserID,
 			&req.Reason,
-			&req.RequestDate,
-			&req.StartTime,
-			&req.EndTime,
+			&reqDate,
+			&startRaw,
+			&endRaw,
 			&req.Status,
 			&req.CurrentStep,
 			&req.CreatedAt,
@@ -717,9 +732,39 @@ func scanPermissionRequests(rows *sql.Rows) ([]domain.PermissionRequest, error) 
 		); err != nil {
 			return nil, err
 		}
+		if reqDate.Valid {
+			s := reqDate.Time.Format("2006-01-02")
+			req.RequestDate = &s
+		}
+		req.StartTime = scanTime(startRaw)
+		req.EndTime = scanTime(endRaw)
 		out = append(out, req)
 	}
 	return out, rows.Err()
+}
+
+// scanTime converts a raw MySQL TIME value to *string.
+// With parseTime=true, go-sql-driver may return TIME as time.Duration, []byte, or string.
+func scanTime(raw any) *string {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case string:
+		return &v
+	case []byte:
+		s := string(v)
+		return &s
+	case time.Duration:
+		totalSec := int64(v.Seconds())
+		h := totalSec / 3600
+		m := (totalSec % 3600) / 60
+		s := totalSec % 60
+		formatted := fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+		return &formatted
+	default:
+		return nil
+	}
 }
 
 func (r *permissionRepository) CancelRequest(requestID, userID int, reason string) error {
@@ -745,6 +790,10 @@ func (r *permissionRepository) CancelRequest(requestID, userID int, reason strin
 	}
 	if status != "pending" && status != "approved" {
 		return errors.New("Hanya permintaan dengan status pending atau disetujui yang dapat dibatalkan")
+	}
+
+	if err := ValidateRefValue(tx, "request_status", "cancelled"); err != nil {
+		return err
 	}
 
 	_, err = tx.Exec(`UPDATE requests SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = ?, cancel_reason = ? WHERE id = ?`,
@@ -1035,6 +1084,9 @@ func (r *permissionRepository) CreateDelegation(userID, delegateUserID int, vali
 	}
 
 	for _, role := range roles {
+		if err := ValidateRefValue(tx, "approver_role", role); err != nil {
+			return err
+		}
 		_, err = tx.Exec(`
 			INSERT INTO request_approval_delegates (original_teacher_id, delegate_teacher_id, delegate_role, valid_from, valid_until, reason, created_by_user_id, is_active)
 			VALUES (?, ?, ?, ?, ?, ?, ?, 1)

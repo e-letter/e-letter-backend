@@ -295,6 +295,9 @@ func (r *authRepository) CreateUser(roleID int, email, passwordHash, status stri
 	if roleID == 2 {
 		role = "teacher"
 	}
+	if err := ValidateRefValue(r.db, "user_status", status); err != nil {
+		return 0, err
+	}
 	res, err := r.db.Exec(
 		`INSERT INTO users (email, password_hash, role, status) VALUES (?, ?, ?, ?)`,
 		email, passwordHash, role, status,
@@ -328,6 +331,11 @@ func (r *authRepository) UpdateUserProfile(userID int, fullName string, profileC
 			userID, fullName, profileCompleted,
 		)
 	} else if role == "kepala_sekolah" {
+		if profileCompleted {
+			if err := ValidateNoActivePrincipal(r.db, 0); err != nil {
+				return err
+			}
+		}
 		_, err = r.db.Exec(
 			`INSERT INTO principal_profiles (user_id, full_name, active) VALUES (?, ?, ?)
 			 ON DUPLICATE KEY UPDATE full_name = VALUES(full_name), active = VALUES(active)`,

@@ -16,11 +16,12 @@ import (
 func main() {
 	cfg := config.LoadConfig()
 
-	loc, err := time.LoadLocation(cfg.App.Timezone)
-	if err != nil {
-		log.Fatalf("Failed to load timezone %s: %v", cfg.App.Timezone, err)
+	time.Local = time.FixedZone("WIB", 7*60*60)
+
+	// Verify the configured timezone is loadable; warn if not.
+	if _, err := time.LoadLocation(cfg.App.Timezone); err != nil {
+		log.Printf("Warning: timezone %s not found in IANA database", cfg.App.Timezone)
 	}
-	time.Local = loc
 
 	db := config.NewMySQLDB(cfg)
 

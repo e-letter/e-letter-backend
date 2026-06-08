@@ -58,7 +58,6 @@ type RequestTypeInfo struct {
 	Label         string
 	LetterPrefix  string
 	RequesterRole string
-	DurationDays  int
 	IsActive      bool
 }
 

@@ -62,12 +62,6 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 		return 0, errors.New("Dispensasi hanya boleh diajukan oleh guru")
 	}
 
-	// Phase 1c: If duration_days = 1, both start_time and end_time are required
-	if typeInfo.DurationDays == 1 {
-		if strings.TrimSpace(req.StartTime) == "" || strings.TrimSpace(req.EndTime) == "" {
-			return 0, errors.New("Untuk izin 1 hari, jam mulai dan jam selesai wajib diisi")
-		}
-	}
 	if strings.TrimSpace(req.StartTime) == "" {
 		return 0, errors.New("start_time diperlukan")
 	}
@@ -106,7 +100,7 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 	if startTime == "" || endTime == "" {
 		return 0, errors.New("format waktu tidak valid (gunakan HH:MM:SS)")
 	}
-	if err := validateSchoolHours(typeInfo.DurationDays, startTime, endTime); err != nil {
+	if err := validateSchoolHours(startTime, endTime); err != nil {
 		return 0, err
 	}
 
@@ -248,9 +242,7 @@ func validateNotWeekend(date string) error {
 }
 
 // validateSchoolHours checks that start and end times are within school operating hours.
-// For multi-day requests (durationDays > 1), only the start time is validated
-// because end_time is optional and gets defaulted to start_time.
-func validateSchoolHours(durationDays int, startTime, endTime string) error {
+func validateSchoolHours(startTime, endTime string) error {
 	parseTimeOnly := func(s string) (int, int, error) {
 		parts := strings.Split(s, ":")
 		if len(parts) < 2 {
@@ -277,11 +269,6 @@ func validateSchoolHours(durationDays int, startTime, endTime string) error {
 	// School hours: 07:00 (420 min) to 15:00 (900 min)
 	if startTotal < 420 || startTotal > 900 {
 		return fmt.Errorf("jam mulai (%02d:%02d) di luar jam operasional sekolah (07:00 - 15:00 WIB)", startH, startM)
-	}
-
-	// Only validate end_time and end > start for single-day requests (durationDays == 1).
-	if durationDays != 1 {
-		return nil
 	}
 
 	endH, endM, err := parseTimeOnly(endTime)

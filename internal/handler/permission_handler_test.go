@@ -74,7 +74,7 @@ func setupRouter(svc service.PermissionService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 
-	h := handler.NewPermissionHandler(svc, false /* isDev */)
+	h := handler.NewPermissionHandler(svc, false, nil)
 
 	// Inject a fake JWT middleware that sets userId=1 and userRole=teacher.
 	authMiddleware := func(c *gin.Context) {

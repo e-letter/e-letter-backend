@@ -401,6 +401,14 @@ func batchInsertApprovalSteps(tx *sql.Tx, requestID int64, steps []resolvedStep)
 	if len(steps) == 0 {
 		return nil
 	}
+	for _, s := range steps {
+		if err := ValidateRefValue(tx, "approval_status", s.Status); err != nil {
+			return err
+		}
+		if err := ValidateRefValue(tx, "approver_role", s.ApproverRole); err != nil {
+			return err
+		}
+	}
 	valueStrings := make([]string, 0, len(steps))
 	valueArgs := make([]any, 0, len(steps)*10)
 	for _, s := range steps {
@@ -479,11 +487,11 @@ func (r *letterRepository) ListLettersForUser(userID int, typeKey string, page, 
 	}
 
 	rows, err := r.db.Query(`
-		SELECT r.id, ANY_VALUE(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
-		       ANY_VALUE(COALESCE(sp_req.full_name, sp_target.full_name, '')) AS student_name,
-		       ANY_VALUE(COALESCE(c_req.class_name, c_target.class_name, '-')) AS class_name,
-		       ANY_VALUE(COALESCE(sp_req.student_code, sp_target.student_code, '-')) AS student_code,
-		       ANY_VALUE(COALESCE(u.email, '-')) AS email
+		SELECT r.id, MAX(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
+		       MAX(COALESCE(sp_req.full_name, sp_target.full_name, '')) AS student_name,
+		       MAX(COALESCE(c_req.class_name, c_target.class_name, '-')) AS class_name,
+		       MAX(COALESCE(sp_req.student_code, sp_target.student_code, '-')) AS student_code,
+		       MAX(COALESCE(u.email, '-')) AS email
 		FROM requests r
 		JOIN request_types rt ON rt.id = r.request_type_id
 		JOIN users u ON u.id = r.requester_user_id
@@ -540,11 +548,11 @@ func (r *letterRepository) ListLettersForTeacher(typeKey string, page, limit int
 	}
 
 	rows, err := r.db.Query(`
-		SELECT r.id, ANY_VALUE(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
-		       ANY_VALUE(COALESCE(sp.full_name,'')) AS student_name,
-		       ANY_VALUE(COALESCE(c.class_name,'-')) AS class_name,
-		       ANY_VALUE(COALESCE(sp.student_code,'-')) AS student_code,
-		       ANY_VALUE(COALESCE(u.email,'-')) AS email
+		SELECT r.id, MAX(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
+		       MAX(COALESCE(sp.full_name,'')) AS student_name,
+		       MAX(COALESCE(c.class_name,'-')) AS class_name,
+		       MAX(COALESCE(sp.student_code,'-')) AS student_code,
+		       MAX(COALESCE(u.email,'-')) AS email
 		FROM requests r
 		JOIN request_types rt ON rt.id = r.request_type_id
 		JOIN users u ON u.id = r.requester_user_id
@@ -771,11 +779,11 @@ func (r *letterRepository) ListGeneralDispensasi(userRole string, userID int, pa
 		`, scopeFilter)
 
 		selectQuery = fmt.Sprintf(`
-			SELECT r.id, ANY_VALUE(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
-			       ANY_VALUE(COALESCE(sp.full_name,'')) AS student_name,
-			       ANY_VALUE(COALESCE(c.class_name,'-')) AS class_name,
-			       ANY_VALUE(COALESCE(sp.student_code,'-')) AS student_code,
-			       ANY_VALUE(COALESCE(u.email,'-')) AS email
+			SELECT r.id, MAX(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
+			       MAX(COALESCE(sp.full_name,'')) AS student_name,
+			       MAX(COALESCE(c.class_name,'-')) AS class_name,
+			       MAX(COALESCE(sp.student_code,'-')) AS student_code,
+			       MAX(COALESCE(u.email,'-')) AS email
 			FROM requests r
 			JOIN request_types rt ON rt.id = r.request_type_id
 			JOIN users u ON u.id = r.requester_user_id
@@ -797,11 +805,11 @@ func (r *letterRepository) ListGeneralDispensasi(userRole string, userID int, pa
 		`
 
 		selectQuery = `
-			SELECT r.id, ANY_VALUE(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
-			       ANY_VALUE(COALESCE(sp.full_name,'')) AS student_name,
-			       ANY_VALUE(COALESCE(c.class_name,'-')) AS class_name,
-			       ANY_VALUE(COALESCE(sp.student_code,'-')) AS student_code,
-			       ANY_VALUE(COALESCE(u.email,'-')) AS email
+			SELECT r.id, MAX(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
+			       MAX(COALESCE(sp.full_name,'')) AS student_name,
+			       MAX(COALESCE(c.class_name,'-')) AS class_name,
+			       MAX(COALESCE(sp.student_code,'-')) AS student_code,
+			       MAX(COALESCE(u.email,'-')) AS email
 			FROM requests r
 			JOIN request_types rt ON rt.id = r.request_type_id
 			JOIN users u ON u.id = r.requester_user_id
@@ -909,11 +917,11 @@ func (r *letterRepository) ListLettersForTeacherScoped(userID int, typeKey strin
 	}
 
 	rows, err := r.db.Query(fmt.Sprintf(`
-		SELECT r.id, ANY_VALUE(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
-		       ANY_VALUE(COALESCE(sp.full_name,'')) AS student_name,
-		       ANY_VALUE(COALESCE(c.class_name,'-')) AS class_name,
-		       ANY_VALUE(COALESCE(sp.student_code,'-')) AS student_code,
-		       ANY_VALUE(COALESCE(u.email,'-')) AS email
+		SELECT r.id, MAX(rt.label) AS label, r.reason, r.status, r.request_date, r.created_at, r.updated_at, r.start_time, r.end_time,
+		       MAX(COALESCE(sp.full_name,'')) AS student_name,
+		       MAX(COALESCE(c.class_name,'-')) AS class_name,
+		       MAX(COALESCE(sp.student_code,'-')) AS student_code,
+		       MAX(COALESCE(u.email,'-')) AS email
 		FROM requests r
 		JOIN request_types rt ON rt.id = r.request_type_id
 		JOIN users u ON u.id = r.requester_user_id
@@ -1053,9 +1061,9 @@ func (r *letterRepository) GetUserRole(userID int) (string, error) {
 func (r *letterRepository) GetRequestTypeInfo(typeID int) (*domain.RequestTypeInfo, error) {
 	info := &domain.RequestTypeInfo{}
 	err := r.db.QueryRow(
-		`SELECT id, code, label, letter_prefix, requester_role, duration_days, is_active FROM request_types WHERE id = ?`,
+		`SELECT id, code, label, letter_prefix, requester_role, is_active FROM request_types WHERE id = ?`,
 		typeID,
-	).Scan(&info.ID, &info.Code, &info.Label, &info.LetterPrefix, &info.RequesterRole, &info.DurationDays, &info.IsActive)
+	).Scan(&info.ID, &info.Code, &info.Label, &info.LetterPrefix, &info.RequesterRole, &info.IsActive)
 	if err != nil {
 		return nil, err
 	}

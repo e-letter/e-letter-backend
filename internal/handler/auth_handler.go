@@ -89,7 +89,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	setRefreshCookie(c, refreshToken, 30*24*60*60)
 
-	utils.LogActivity(h.db, int64(user.ID), "login", "Login: "+user.Email, c.ClientIP(), c.Request.UserAgent())
+	emailStr := ""
+	if user.Email != nil {
+		emailStr = *user.Email
+	}
+	utils.LogActivity(h.db, int64(user.ID), "login", "Login berhasil: "+emailStr, c.ClientIP(), c.Request.UserAgent())
 
 	response.Raw(c, http.StatusOK, gin.H{
 		"success": true,
@@ -192,8 +196,6 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	refreshToken, _ := c.Cookie("refreshToken")
 	_ = h.service.Logout(refreshToken)
 	setRefreshCookie(c, "", -1)
-	userID := toIntFromContext(c, "userId")
-	utils.LogActivity(h.db, int64(userID), "logout", "Logout", c.ClientIP(), c.Request.UserAgent())
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Logout berhasil"})
 }
 

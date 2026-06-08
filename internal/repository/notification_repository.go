@@ -262,6 +262,10 @@ func (r *notificationRepository) Create(ctx context.Context, userID int64, notif
 		return err
 	}
 
+	if err := PruneNotifications(r.db, userID); err != nil {
+		return err
+	}
+
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO notifications (user_id, request_id, approval_id, type, title, body)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
@@ -275,12 +279,65 @@ func createNotificationTx(tx *sql.Tx, userID int64, notifType, title string, bod
 		return err
 	}
 
+	if err := PruneNotifications(tx, userID); err != nil {
+		return err
+	}
+
 	_, err := tx.Exec(
 		`INSERT INTO notifications (user_id, request_id, approval_id, type, title, body)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		userID, nullableInt64(requestID), nullableInt64(approvalID), notifType, title, nullableString(body),
 	)
 	return err
+}
+
+func PruneNotifications(q refValueChecker, userID int64) error {
+	var total int
+	if err := q.QueryRow(`SELECT COUNT(*) FROM notifications WHERE user_id = ?`, userID).Scan(&total); err != nil {
+		return err
+	}
+	if total < 100 {
+		return nil
+	}
+
+	var readCount int
+	if err := q.QueryRow(`SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 1`, userID).Scan(&readCount); err != nil {
+		return err
+	}
+
+	if readCount > 0 {
+		_, err := q.Exec(
+			`DELETE FROM notifications
+			 WHERE user_id = ? AND is_read = 1
+			 AND id NOT IN (
+			   SELECT id FROM (
+			     SELECT id FROM notifications
+			     WHERE user_id = ? AND is_read = 1
+			     ORDER BY created_at DESC
+			     LIMIT 50
+			   ) AS keep_read
+			 )`, userID, userID,
+		)
+		return err
+	}
+
+	if total >= 150 {
+		_, err := q.Exec(
+			`DELETE FROM notifications
+			 WHERE user_id = ? AND is_read = 0
+			 AND id NOT IN (
+			   SELECT id FROM (
+			     SELECT id FROM notifications
+			     WHERE user_id = ?
+			     ORDER BY created_at DESC
+			     LIMIT 149
+			   ) AS keep_unread
+			 )`, userID, userID,
+		)
+		return err
+	}
+
+	return nil
 }
 
 func nullableInt64(value *int64) any {
