@@ -226,7 +226,10 @@ Klien web menggunakan pembungkus (wrapper) khusus `authenticatedFetch` untuk mem
 
 ```typescript
 // src/lib/authenticated-fetch.ts
-export async function authenticatedFetch(url: string, options: RequestInit = {}) {
+export async function authenticatedFetch(
+  url: string,
+  options: RequestInit = {},
+) {
   let token = getAccessToken(); // baca dari memori/state
 
   // Lampirkan token

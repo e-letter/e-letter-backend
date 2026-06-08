@@ -572,6 +572,20 @@ func (r *authRepository) MarkPasswordResetUsed(email, otpCode string) error {
 }
 
 func (r *authRepository) UpdatePassword(userID int, passwordHash string) error {
-	_, err := r.db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, userID)
-	return err
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Migration of trg_jwt_revoke_on_password_change: revoke all existing JWT tokens.
+	if _, err := tx.Exec(`UPDATE jwt_tokens SET is_revoked = 1, revoked_at = NOW(), revoked_reason = 'password_changed' WHERE user_id = ? AND is_revoked = 0`, userID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, userID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
