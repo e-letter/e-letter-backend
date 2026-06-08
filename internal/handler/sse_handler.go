@@ -8,7 +8,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// EventBus is a simple in-memory pub/sub for SSE
 type EventBus struct {
 	mu          sync.RWMutex
 	subscribers map[int][]chan string

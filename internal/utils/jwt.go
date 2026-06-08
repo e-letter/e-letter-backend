@@ -9,7 +9,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// TokenClaims represents the JWT token claims
 type TokenClaims struct {
 	UserID            int      `json:"userId"`
 	Email             string   `json:"email"`
@@ -17,7 +16,7 @@ type TokenClaims struct {
 	MainRole          string   `json:"mainRole"`
 	SubRoles          []string `json:"subRoles"`
 	IsProfileComplete bool     `json:"isProfileComplete"`
-	Type              string   `json:"type"` // "access" or "refresh"
+	Type              string   `json:"type"`
 	jwt.RegisteredClaims
 }
 
@@ -26,12 +25,10 @@ var (
 	errExpiredToken = errors.New("token expired")
 )
 
-// GenerateToken generates a new JWT token with the specified claims
 func GenerateToken(secret string, userID int, email string, role string, tokenType string, expiresIn time.Duration) (string, error) {
 	return GenerateTokenFull(secret, userID, email, role, "", nil, false, tokenType, expiresIn)
 }
 
-// GenerateTokenFull generates a JWT token with full hierarchical role claims
 func GenerateTokenFull(secret string, userID int, email string, role string, mainRole string, subRoles []string, isProfileComplete bool, tokenType string, expiresIn time.Duration) (string, error) {
 	now := time.Now()
 	if subRoles == nil {
@@ -62,7 +59,6 @@ func GenerateTokenFull(secret string, userID int, email string, role string, mai
 	return tokenString, nil
 }
 
-// mapRoleToMainRole converts DB role to frontend MainRole
 func mapRoleToMainRole(role string) string {
 	switch role {
 	case "student":
@@ -78,12 +74,10 @@ func mapRoleToMainRole(role string) string {
 	}
 }
 
-// ParseAndValidateToken parses and validates a JWT token
 func ParseAndValidateToken(tokenString, secret, expectedType string) (TokenClaims, error) {
 	var claims TokenClaims
 
 	token, err := jwt.ParseWithClaims(tokenString, &claims, func(token *jwt.Token) (interface{}, error) {
-		// Verify the signing method
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
@@ -98,12 +92,10 @@ func ParseAndValidateToken(tokenString, secret, expectedType string) (TokenClaim
 		return TokenClaims{}, errInvalidToken
 	}
 
-	// Validate token type
 	if expectedType != "" && claims.Type != expectedType {
 		return TokenClaims{}, fmt.Errorf("unexpected token type: expected %s, got %s", expectedType, claims.Type)
 	}
 
-	// Check expiration
 	if claims.ExpiresAt != nil && claims.ExpiresAt.Before(time.Now()) {
 		return TokenClaims{}, errExpiredToken
 	}
@@ -111,7 +103,6 @@ func ParseAndValidateToken(tokenString, secret, expectedType string) (TokenClaim
 	return claims, nil
 }
 
-// HashToken returns a SHA256 hash of the token (used for storing refresh tokens)
 func HashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return fmt.Sprintf("%x", sum)

@@ -8,14 +8,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// CORS sets up Cross-Origin Resource Sharing headers.
-// Wildcard "*" is intentionally avoided because credentials: 'include'
-// requires an explicit, reflected origin.
 func CORS() gin.HandlerFunc {
-	// Read allowed origins from env; fall back to localhost for local dev.
 	rawOrigins := os.Getenv("FRONTEND_URL")
 	if rawOrigins == "" {
-		// Fallback for legacy deployments still using CORS_ALLOWED_ORIGINS
 		rawOrigins = os.Getenv("CORS_ALLOWED_ORIGINS")
 	}
 	if rawOrigins == "" {

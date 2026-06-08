@@ -19,7 +19,6 @@ type letterRepository struct {
 	publisher  NotificationPublisher
 }
 
-// resolvedStep holds the resolved data for a single approval step before insertion.
 type resolvedStep struct {
 	StepNo              int
 	ApproverRole        string
@@ -65,13 +64,11 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 	}
 	requestID := int(id)
 
-	// Batch INSERT for request_students — single round trip instead of N.
 	if len(req.Students) > 0 {
 		if err := batchInsertRequestStudents(tx, requestID, req.Students); err != nil {
 			return 0, err
 		}
 	} else {
-		// Fallback: check if the requester has a student profile, and insert their student ID.
 		var studentID int
 		err := tx.QueryRow(`SELECT id FROM student_profiles WHERE user_id = ?`, userID).Scan(&studentID)
 		if err == nil {
@@ -83,7 +80,6 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 		}
 	}
 
-	// --- Approval Orchestration ---
 	firstPendingStep, firstPendingApproverUserID, err := r.createApprovalSteps(tx, int64(requestID), req.TypeID, userID, int64(academicYearID))
 	if err != nil {
 		return 0, fmt.Errorf("approval orchestration: %w", err)
@@ -100,8 +96,6 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 		return 0, err
 	}
 
-	// Notify each student who is the subject of the request (dispensasi from teacher).
-	// Resolve student_profiles.id -> user_id and create a notification for each.
 	var studentUserIDs []int
 	if len(req.Students) > 0 {
 		placeholders := make([]string, len(req.Students))
@@ -122,7 +116,6 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 		}
 	}
 
-	// Get teacher/requester name for notification title
 	var teacherName string
 	_ = tx.QueryRow(`SELECT full_name FROM teacher_profiles WHERE user_id = ?`, userID).Scan(&teacherName)
 	if teacherName == "" {
@@ -157,12 +150,10 @@ func (r *letterRepository) CreateLetter(userID int, req domain.LetterCreateReque
 	return requestID, nil
 }
 
-// batchInsertRequestStudents inserts all student IDs in a single multi-row INSERT.
 func batchInsertRequestStudents(tx *sql.Tx, requestID int, studentIDs []int) error {
 	if len(studentIDs) == 0 {
 		return nil
 	}
-	// Build multi-row VALUES clause: (?,?),(?,?),...
 	valueStrings := make([]string, 0, len(studentIDs))
 	valueArgs := make([]any, 0, len(studentIDs)*2)
 	for _, sid := range studentIDs {
@@ -174,13 +165,7 @@ func batchInsertRequestStudents(tx *sql.Tx, requestID int, studentIDs []int) err
 	return err
 }
 
-// createApprovalSteps reads flow templates, resolves approvers, inserts approval rows,
-// and sends a notification to the first pending approver. Returns the first pending step number.
-//
-// Optimization: all reference data (role assignments, schedules, profiles) is preloaded ONCE
-// before the template loop, eliminating N+1 query patterns. All queries use tx for transactional consistency.
 func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requestTypeID int, userID int, academicYearID int64) (int, *int64, error) {
-	// 1. Read flow templates (via tx, not r.db)
 	rows, err := tx.Query(
 		`SELECT step_no, approver_role, is_required, skip_if_no_schedule
 		 FROM approval_flow_templates WHERE request_type_id = ? ORDER BY step_no ASC`, requestTypeID)
@@ -210,7 +195,6 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 		return 1, nil, nil
 	}
 
-	// 2. Gather student context (via tx)
 	var classID sql.NullInt64
 	err = tx.QueryRow(
 		`SELECT sce.class_id FROM student_profiles sp
@@ -234,10 +218,6 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 		return 1, nil, fmt.Errorf("resolve student signature: %w", err)
 	}
 
-	// 3. Preload ALL reference data ONCE — eliminates N+1 inside the template loop.
-	//    These maps are keyed by the relevant ID for O(1) lookup.
-
-	// homeroomMap: classID -> teacherID (for wali_kelas resolution)
 	homeroomMap := make(map[int64]int64)
 	if classID.Valid {
 		var hid int64
@@ -249,7 +229,6 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 		}
 	}
 
-	// kaproMap: majorID -> teacherID (for kapro resolution)
 	kaproMap := make(map[int64]int64)
 	if majorID.Valid {
 		var kid int64
@@ -261,7 +240,6 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 		}
 	}
 
-	// tatibTeacherID: any active tatib teacher
 	var tatibTeacherID sql.NullInt64
 	{
 		var tid int64
@@ -272,7 +250,6 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 		}
 	}
 
-	// kepsekPrincipalID: active principal
 	var kepsekPrincipalID sql.NullInt64
 	{
 		var pid int64
@@ -283,10 +260,8 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 		}
 	}
 
-	// Determine request_date for schedule lookup
 	requestDate := time.Now().Format("2006-01-02")
 
-	// 4. Resolve each step using preloaded maps
 	var steps []resolvedStep
 	firstPendingStep := -1
 
@@ -356,14 +331,12 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 		steps = append(steps, s)
 	}
 
-	// 5. Batch INSERT all approval rows — single round trip instead of N.
 	if len(steps) > 0 {
 		if err := batchInsertApprovalSteps(tx, requestID, steps); err != nil {
 			return 1, nil, fmt.Errorf("batch insert approval steps: %w", err)
 		}
 	}
 
-	// 6. Notify first pending approver
 	if firstPendingStep >= 0 {
 		for _, s := range steps {
 			if s.StepNo == firstPendingStep && s.Status == "pending" {
@@ -396,7 +369,6 @@ func (r *letterRepository) createApprovalSteps(tx *sql.Tx, requestID int64, requ
 	return firstPendingStep, nil, nil
 }
 
-// batchInsertApprovalSteps inserts all resolved approval steps in a single multi-row INSERT.
 func batchInsertApprovalSteps(tx *sql.Tx, requestID int64, steps []resolvedStep) error {
 	if len(steps) == 0 {
 		return nil
@@ -430,8 +402,6 @@ func batchInsertApprovalSteps(tx *sql.Tx, requestID int64, steps []resolvedStep)
 	return err
 }
 
-// findGuruMapelSchedule finds a teacher with a schedule on the given date for the class.
-// Uses tx for transactional consistency instead of r.db.
 func (r *letterRepository) findGuruMapelSchedule(tx *sql.Tx, classID, academicYearID int64, requestDate string) (*int64, *int64) {
 	t, err := time.Parse("2006-01-02", requestDate)
 	if err != nil {
@@ -439,7 +409,7 @@ func (r *letterRepository) findGuruMapelSchedule(tx *sql.Tx, classID, academicYe
 	}
 	day := dayOfWeekIndo(t.Weekday())
 	if day == "" {
-		return nil, nil // weekend
+		return nil, nil
 	}
 
 	var teacherID, scheduleID int64

@@ -55,13 +55,6 @@ func (r *permissionRepository) ListAll(startDate, endDate string) ([]domain.Perm
 }
 
 func (r *permissionRepository) ListByUser(userID int, startDate, endDate string) ([]domain.PermissionRequest, error) {
-	// Scope: include letters where the user is EITHER
-	//   (a) the requester (izin_masuk/izin_keluar self-submitted), OR
-	//   (b) listed in request_students (dispensasi created by teacher on their behalf, or any letter
-	//       that was linked to the student via the create flow's fallback path).
-	// Use a subquery for the listed-student check instead of a LEFT JOIN + OR in WHERE — referencing a
-	// LEFT-JOINed column in a WHERE OR can be folded into an implicit INNER JOIN by the MariaDB optimizer,
-	// which would silently drop letters whose only join is via request_students.
 	query := `
 		SELECT r.id,
 		       MAX(r.request_type_id) AS request_type_id,
@@ -340,13 +333,11 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 	}
 	defer tx.Rollback()
 
-	// 1. Validate approval step & role authority
 	callerTeacherID, callerPrincipalID, _, isDelegated, delegatedFromID, err := ValidateApprovalStep(tx, req.RequestID, req.StageID, approverID)
 	if err != nil {
 		return err
 	}
 
-	// Fetch signature URL from profile
 	var signatureURLVal *string
 	if req.Status == "approved" {
 		var sigStr sql.NullString
@@ -368,7 +359,6 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		}
 	}
 
-	// 2. Perform the update based on role and delegation
 	var teacherIDVal *int64
 	if callerTeacherID > 0 {
 		teacherIDVal = &callerTeacherID
@@ -406,14 +396,6 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		return fmt.Errorf("approval step not found for this request")
 	}
 
-	// 2.5 Time-bounded bypass (izin_keluar >30 min) & multi-role cascade
-	//
-	// RBAC.md §9 rules:
-	//   • Within 30 min: strictly sequential (guru_mapel → tatib).
-	//   • After  30 min: kapro may approve on behalf of guru_mapel; that pending
-	//     step is auto-skipped immediately. Tatib is ALWAYS mandatory and NEVER skipped.
-	//   • Multi-role: when the acting user holds multiple roles that overlap with pending steps,
-	//     the cascade loop below auto-approves those steps on their behalf.
 	var elapsedMinutes int
 	var requestCode string
 	err = tx.QueryRow(`
@@ -429,7 +411,6 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 	isIzinKeluarLate := requestCode == "izin_keluar" && elapsedMinutes > 30
 
 	if isIzinKeluarLate && req.Status == "approved" {
-		// Check if the acting approver is kapro (bypass authority).
 		var bypassTeacherID sql.NullInt64
 		err = tx.QueryRow(
 			`SELECT id FROM teacher_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL`,
@@ -469,9 +450,6 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		}
 	}
 
-	// Multi-role cascade: check if the approver holds additional roles that can cover
-	// any remaining pending steps (e.g. a teacher who is both guru_mapel and tatib).
-	// Capped at 10 iterations to prevent infinite loops under contention.
 	const maxCascadeIterations = 10
 	for i := 0; i < maxCascadeIterations; i++ {
 		rowsPending, err := tx.Query(`
@@ -553,7 +531,6 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		}
 	}
 
-	// 3. Determine request status: stays 'pending' unless all required steps done or one rejected
 	targetStatus := "pending"
 	if req.Status == "rejected" {
 		targetStatus = "rejected"
@@ -571,7 +548,6 @@ func (r *permissionRepository) Approve(req domain.ApprovalRequest, approverID in
 		}
 	}
 
-	// Calculate and update current_step if this step is successfully approved
 	var currentStep int
 	if req.Status == "approved" || req.Status == "skipped" {
 		err = tx.QueryRow(`
@@ -743,8 +719,6 @@ func scanPermissionRequests(rows *sql.Rows) ([]domain.PermissionRequest, error) 
 	return out, rows.Err()
 }
 
-// scanTime converts a raw MySQL TIME value to *string.
-// With parseTime=true, go-sql-driver may return TIME as time.Duration, []byte, or string.
 func scanTime(raw any) *string {
 	if raw == nil {
 		return nil
@@ -774,7 +748,6 @@ func (r *permissionRepository) CancelRequest(requestID, userID int, reason strin
 	}
 	defer tx.Rollback()
 
-	// Verify ownership and status atomically inside the transaction.
 	var requesterID int
 	var status string
 	var requestNumber string
@@ -813,7 +786,6 @@ func (r *permissionRepository) CancelRequest(requestID, userID int, reason strin
 func ptrInt64(v int64) *int64 { return &v }
 
 func (r *permissionRepository) GetRequestDetail(requestID int) (any, error) {
-	// Get request info
 	var req struct {
 		ID            int     `json:"id"`
 		RequestNumber string  `json:"request_number"`
@@ -959,7 +931,6 @@ func (r *permissionRepository) RequestTeacherRole(userID int, roleName string, m
 	var academicYearID int
 	_ = r.db.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&academicYearID)
 
-	// Build subject_ids as comma-separated string for storage in the staging column.
 	var subjectIDsStr *string
 	if len(meta.SubjectIDs) > 0 {
 		parts := make([]string, len(meta.SubjectIDs))
@@ -1064,7 +1035,6 @@ func (r *permissionRepository) CreateDelegation(userID, delegateUserID int, vali
 		return fmt.Errorf("profil guru penerima delegasi tidak aktif: %w", err)
 	}
 
-	// Fetch active roles for the original teacher
 	rows, err := tx.Query(`SELECT role_name FROM teacher_roles WHERE teacher_id = ? AND status = 'active'`, originalTeacherID)
 	if err != nil {
 		return err

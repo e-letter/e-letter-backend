@@ -24,7 +24,6 @@ func (s *userProfileService) GetProfile(userID int) (*domain.User, error) {
 }
 
 func (s *userProfileService) UpdateProfile(req domain.UserProfileUpdatePayload) (*domain.User, error) {
-	// Admin users (userID=0) don't need profile updates
 	if req.UserID == 0 {
 		return s.repo.GetByUserID(0)
 	}

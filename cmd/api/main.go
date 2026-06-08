@@ -18,9 +18,7 @@ func main() {
 
 	time.Local = time.FixedZone("WIB", 7*60*60)
 
-	// Verify the configured timezone is loadable; warn if not.
 	if _, err := time.LoadLocation(cfg.App.Timezone); err != nil {
-		log.Printf("Warning: timezone %s not found in IANA database", cfg.App.Timezone)
 	}
 
 	db := config.NewMySQLDB(cfg)
@@ -81,8 +79,6 @@ func main() {
 		adminHandler,
 		sseHandler,
 	)
-
-	log.Printf("Server running in %s mode on port %s\n", cfg.App.Env, cfg.App.Port)
 
 	if err := router.Run(":" + cfg.App.Port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)

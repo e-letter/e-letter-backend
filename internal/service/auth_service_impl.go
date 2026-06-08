@@ -44,14 +44,12 @@ func (s *authService) Register(req domain.RegisterRequest) (int, string, error) 
 	roleLower := strings.ToLower(req.Role)
 	isTeacher := roleLower == "guru" || roleLower == "teacher"
 
-	// Enforce @guru.smk.belajar.id domain for teacher accounts.
 	if isTeacher {
 		if !strings.HasSuffix(strings.ToLower(strings.TrimSpace(req.Email)), "@guru.smk.belajar.id") {
 			return 0, "", errors.New("Pendaftaran guru hanya diizinkan menggunakan email @guru.smk.belajar.id")
 		}
 	}
 
-	// Use status-agnostic lookup to prevent duplicate registrations from pending accounts.
 	existing, err := s.repo.GetUserByEmailAnyStatus(req.Email)
 	if err != nil {
 		return 0, "", fmt.Errorf("gagal memeriksa email: %w", err)
@@ -73,8 +71,6 @@ func (s *authService) Register(req domain.RegisterRequest) (int, string, error) 
 		return 0, "", err
 	}
 
-	// Teachers are created as 'pending' — they cannot log in until an admin approves them.
-	// All other roles (student, etc.) are activated immediately.
 	initialStatus := "active"
 	if isTeacher {
 		initialStatus = "pending"
@@ -126,7 +122,6 @@ func (s *authService) Login(req domain.LoginRequest, ip, userAgent string) (*dom
 		return nil, "", "", errors.New("ID atau kata sandi tidak valid")
 	}
 
-	// Handle pending, inactive, and blocked users.
 	if user.Status == "pending" {
 		return nil, "", "", errors.New("akun masih belum di aktivasi/disetujui oleh admin")
 	}
@@ -145,7 +140,6 @@ func (s *authService) Login(req domain.LoginRequest, ip, userAgent string) (*dom
 		UserAgent: userAgent,
 	})
 
-	// Generate access token with full claims
 	email := ""
 	if user.Email != nil {
 		email = *user.Email
@@ -158,7 +152,6 @@ func (s *authService) Login(req domain.LoginRequest, ip, userAgent string) (*dom
 		return nil, "", "", err
 	}
 
-	// Generate refresh token
 	refreshToken, err := utils.GenerateTokenFull(s.jwtSecret, user.ID, email, user.Role, "", subRoles, user.ProfileCompleted, "refresh", s.refreshExpiry)
 	if err != nil {
 		return nil, "", "", err
@@ -175,11 +168,7 @@ func (s *authService) Login(req domain.LoginRequest, ip, userAgent string) (*dom
 	return user, accessToken, refreshToken, nil
 }
 
-// IssueAdminTokens looks up the admin/kepsek's real DB user_id by username, then generates
-// access/refresh tokens using that ID and persists the refresh token hash so that the
-// standard /auth/refresh endpoint can rotate it correctly.
 func (s *authService) IssueAdminTokens(adminUsername string) (string, string, int, error) {
-	// Resolve the real user_id from the database to satisfy the FK on jwt_tokens.
 	lookupUsername := adminUsername
 	if lookupUsername == "admin" {
 		lookupUsername = "ADM-001"
@@ -192,7 +181,6 @@ func (s *authService) IssueAdminTokens(adminUsername string) (string, string, in
 		return "", "", 0, fmt.Errorf("user tidak ditemukan di database: %w", err)
 	}
 
-	// Determine role and main role based on username
 	var role string
 	var mainRole string
 	if lookupUsername == "ADM-001" {
@@ -213,7 +201,6 @@ func (s *authService) IssueAdminTokens(adminUsername string) (string, string, in
 		email = "kepsek@system"
 	}
 
-	// Override with actual email from database if available
 	if user.Email != nil && *user.Email != "" {
 		email = *user.Email
 	} else if user.Username != nil {
@@ -276,8 +263,6 @@ func (s *authService) Refresh(refreshToken string) (string, string, error) {
 
 	subRoles := s.repo.GetTeacherSubRoles(claims.UserID)
 
-	// Re-read ProfileCompleted from DB so the refreshed token always reflects
-	// the current state (e.g. after the user completes onboarding).
 	var isProfileComplete bool
 	if freshUser, err := s.repo.GetUserByID(claims.UserID); err == nil && freshUser != nil {
 		isProfileComplete = freshUser.ProfileCompleted
@@ -285,13 +270,11 @@ func (s *authService) Refresh(refreshToken string) (string, string, error) {
 		isProfileComplete = claims.IsProfileComplete
 	}
 
-	// Generate new access token
 	newAccessToken, err := utils.GenerateTokenFull(s.jwtSecret, claims.UserID, claims.Email, claims.Role, claims.MainRole, subRoles, isProfileComplete, "access", s.accessExpiry)
 	if err != nil {
 		return "", "", err
 	}
 
-	// Generate new refresh token
 	newRefreshToken, err := utils.GenerateTokenFull(s.jwtSecret, claims.UserID, claims.Email, claims.Role, claims.MainRole, subRoles, isProfileComplete, "refresh", s.refreshExpiry)
 	if err != nil {
 		return "", "", err
@@ -324,8 +307,6 @@ func (s *authService) ForgotPassword(email, ip string) error {
 		return err
 	}
 
-	// Send OTP asynchronously so the request returns without waiting on email delivery.
-	// Note: We send to the real email input by the user.
 	go func(recipient, code string, expiry time.Time) {
 		_ = s.mailer.SendOTP(recipient, code, expiry)
 	}(email, otp, expiresAt)
@@ -334,7 +315,6 @@ func (s *authService) ForgotPassword(email, ip string) error {
 }
 
 func (s *authService) VerifyOTP(email, otp string) error {
-	// Bypass database lookup for the user and use fallback email for database check.
 	realEmail := "krismawandi@guru.smk.belajar.id"
 
 	otpHash := utils.HashToken(otp)
@@ -346,7 +326,6 @@ func (s *authService) VerifyOTP(email, otp string) error {
 }
 
 func (s *authService) ResetPassword(email, otp, newPassword string) error {
-	// Bypass database lookup for the user and use fallback email for database check.
 	realEmail := "krismawandi@guru.smk.belajar.id"
 
 	otpHash := utils.HashToken(otp)
@@ -355,7 +334,6 @@ func (s *authService) ResetPassword(email, otp, newPassword string) error {
 		return errors.New("OTP tidak valid atau sudah kedaluwarsa")
 	}
 
-	// Ideally this OTP burn and the password update should happen in a single DB transaction.
 	if err := s.repo.MarkPasswordResetUsed(realEmail, otpHash); err != nil {
 		return err
 	}

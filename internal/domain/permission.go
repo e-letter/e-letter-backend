@@ -36,8 +36,6 @@ type ApprovalRequest struct {
 	Status       string  `json:"status"`
 	Notes        *string `json:"notes"`
 	SignatureURL *string `json:"signature_url"`
-	// ApproverRole is the sub-role the caller is using to approve this step.
-	// Carries through to the approver_role audit field in request_approvals.
 	ApproverRole *string `json:"approver_role"`
 }
 
@@ -62,19 +60,12 @@ type UpdatePermissionRequest struct {
 	Status        *string `json:"status"`
 }
 
-// TeacherRoleMetadata carries assignment-specific data submitted during role
-// registration. Persisted on the teacher_roles staging columns and consumed
-// atomically when an admin verifies (activates) the role.
 type TeacherRoleMetadata struct {
-	// HomeroomClassID is required when RoleName == "wali_kelas".
-	HomeroomClassID *int `json:"homeroom_class_id,omitempty"`
-	// MajorID is required when RoleName == "kapro".
-	MajorID *int `json:"major_id,omitempty"`
-	// SubjectIDs lists the subjects this guru_mapel teaches.
-	SubjectIDs []int `json:"subject_ids,omitempty"`
+	HomeroomClassID *int  `json:"homeroom_class_id,omitempty"`
+	MajorID         *int  `json:"major_id,omitempty"`
+	SubjectIDs      []int `json:"subject_ids,omitempty"`
 }
 
-// PendingTeacherRole is the read model returned to the admin approval queue.
 type PendingTeacherRole struct {
 	ID              int     `json:"id"`
 	TeacherID       int     `json:"teacher_id"`
@@ -86,7 +77,7 @@ type PendingTeacherRole struct {
 	HomeroomClass   *string `json:"homeroom_class,omitempty"`
 	MajorID         *int    `json:"major_id,omitempty"`
 	MajorName       *string `json:"major_name,omitempty"`
-	SubjectIDs      *string `json:"subject_ids,omitempty"` // raw comma-separated from DB
+	SubjectIDs      *string `json:"subject_ids,omitempty"`
 	CreatedAt       string  `json:"created_at"`
 }
 
@@ -111,7 +102,6 @@ type PermissionRepository interface {
 	CreateDelegation(userID, delegateUserID int, validFrom, validUntil, reason string) error
 	ListDelegations(userID int) (any, error)
 	DeleteDelegation(id, userID int) error
-	// Admin operations
 	ListPendingTeacherRoles(status string) ([]PendingTeacherRole, error)
 	RejectTeacherRole(id, adminUserID int, reason string) error
 }

@@ -50,7 +50,6 @@ func (r *notificationRepository) GetByUser(ctx context.Context, userID int64) ([
 		return nil, err
 	}
 
-	// Track request IDs already covered by real notifications
 	existingReqIDs := make(map[int64]bool)
 	for _, n := range notifications {
 		if n.RequestID != nil {
@@ -58,16 +57,13 @@ func (r *notificationRepository) GetByUser(ctx context.Context, userID int64) ([
 		}
 	}
 
-	// Add virtual notifications from requests where user is requester
 	virtualID := int64(-1)
 	virtualNotifs, err := r.getRequestsAsNotifications(ctx, userID, existingReqIDs, &virtualID)
 	if err != nil {
-		// Non-fatal: return what we have
 		return notifications, nil
 	}
 	notifications = append(notifications, virtualNotifs...)
 
-	// Sort by created_at DESC
 	sort.Slice(notifications, func(i, j int) bool {
 		return notifications[i].CreatedAt.After(notifications[j].CreatedAt)
 	})
@@ -89,7 +85,6 @@ type virtualRow struct {
 func (r *notificationRepository) getRequestsAsNotifications(ctx context.Context, userID int64, existingReqIDs map[int64]bool, virtualID *int64) ([]domain.Notification, error) {
 	var notifications []domain.Notification
 
-	// Query 1: Requests where user is the requester
 	rows1, err := r.db.QueryContext(ctx, `
 		SELECT r.id, NULL, rt.code, rt.label, r.reason, r.status, COALESCE(r.submitted_at, r.created_at), ''
 		FROM requests r
@@ -113,7 +108,6 @@ func (r *notificationRepository) getRequestsAsNotifications(ctx context.Context,
 		rows1.Close()
 	}
 
-	// Query 2: Requests where user is an approver (via teacher_profiles or principal_profiles)
 	rows2, err := r.db.QueryContext(ctx, `
 		SELECT r.id, ra.id, rt.code, rt.label, r.reason, ra.status, COALESCE(ra.acted_at, r.created_at), ''
 		FROM request_approvals ra
@@ -157,7 +151,6 @@ func (r *notificationRepository) getRequestsAsNotifications(ctx context.Context,
 		rows2.Close()
 	}
 
-	// Query 3: Requests where user is listed as a student subject (via request_students)
 	rows3, err := r.db.QueryContext(ctx, `
 		SELECT r.id, NULL, rt.code, rt.label, r.reason, r.status, COALESCE(r.submitted_at, r.created_at), COALESCE(tp_req.full_name, pp_req.full_name, '')
 		FROM requests r
@@ -207,7 +200,6 @@ func (r *notificationRepository) buildVirtualNotification(userID int64, v virtua
 		}
 	}
 
-	// Build status label in Indonesian
 	statusLabel := ""
 	switch v.ReqStatus {
 	case "pending":

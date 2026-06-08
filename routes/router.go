@@ -38,7 +38,6 @@ func SetupRouter(
 
 	api := r.Group("/api/v1")
 	{
-		// Public auth endpoints
 		api.POST("/register", rateLimiter.RegisterRateLimiter(), authHandler.Register)
 		api.POST("/auth/login", rateLimiter.LoginRateLimiter(), authHandler.Login)
 		api.POST("/auth/admin-login", rateLimiter.LoginAdminRateLimiter(), authHandler.AdminLogin)
@@ -53,11 +52,9 @@ func SetupRouter(
 		api.GET("/config/school", adminHandler.GetSchoolConfig)
 		api.GET("/config/principal", adminHandler.GetPrincipalConfig)
 
-		// Protected routes (any authenticated user)
 		protected := api.Group("/")
 		protected.Use(middleware.RequireAccessToken(cfg.JWT.Secret))
 		{
-			// User profile
 			protected.GET("/user/profile", rateLimiter.ReadRateLimiter(), userProfileHandler.GetProfile)
 			protected.POST("/user/profile", rateLimiter.ReadRateLimiter(), userProfileHandler.GetProfile)
 			protected.POST("/user/update", rateLimiter.WriteRateLimiter(), userProfileHandler.UpdateProfile)
@@ -65,7 +62,6 @@ func SetupRouter(
 			protected.POST("/user/complete-onboarding", rateLimiter.WriteRateLimiter(), userProfileHandler.CompleteOnboarding)
 			protected.GET("/user/schedules", rateLimiter.ReadRateLimiter(), userProfileHandler.GetSchedules)
 
-			// Permission requests
 			protected.GET("/permission-requests", rateLimiter.ReadRateLimiter(), permissionHandler.GetRequests)
 			protected.POST("/permission-requests", rateLimiter.WriteRateLimiter(), permissionHandler.CreateRequest)
 			protected.PUT("/permission-requests", rateLimiter.WriteRateLimiter(), permissionHandler.UpdateRequest)
@@ -75,7 +71,6 @@ func SetupRouter(
 			protected.GET("/request-detail/:id", rateLimiter.ReadRateLimiter(), permissionHandler.GetRequestDetail)
 			protected.POST("/approve", rateLimiter.WriteRateLimiter(), permissionHandler.Approve)
 
-			// Letters
 			protected.POST("/letters/student/create", rateLimiter.WriteRateLimiter(), letterHandler.CreateStudent)
 			protected.POST("/letters/teacher/create", rateLimiter.WriteRateLimiter(), letterHandler.CreateTeacher)
 			protected.POST("/letters/dispensasi", rateLimiter.WriteRateLimiter(), letterHandler.CreateTeacher)
@@ -93,12 +88,10 @@ func SetupRouter(
 			protected.GET("/letters/kepsek/pending", rateLimiter.ReadRateLimiter(), letterHandler.KepsekPending)
 			protected.GET("/letters/kepsek/stats", rateLimiter.ReadRateLimiter(), letterHandler.KepsekStats)
 
-			// Attachments
 			protected.GET("/attachments/:id", rateLimiter.ReadRateLimiter(), attachmentHandler.GetByID)
 			protected.GET("/attachments/request/:requestId", rateLimiter.ReadRateLimiter(), attachmentHandler.ListByRequest)
 			protected.POST("/attachments/upload", rateLimiter.WriteRateLimiter(), attachmentHandler.Upload)
 
-			// Master data
 			protected.GET("/classes", rateLimiter.ReadRateLimiter(), masterDataHandler.GetClasses)
 			protected.GET("/class/:id", rateLimiter.ReadRateLimiter(), masterDataHandler.GetClass)
 			protected.GET("/majors", rateLimiter.ReadRateLimiter(), masterDataHandler.GetMajors)
@@ -106,14 +99,11 @@ func SetupRouter(
 			protected.GET("/students", rateLimiter.ReadRateLimiter(), masterDataHandler.GetStudents)
 			protected.GET("/subjects", rateLimiter.ReadRateLimiter(), adminHandler.GetSubjects)
 
-			// Notifications
 			protected.GET("/notifications", rateLimiter.ReadRateLimiter(), notificationHandler.GetNotifications)
 			protected.PATCH("/notifications/:id/read", rateLimiter.WriteRateLimiter(), notificationHandler.MarkAsRead)
 
-			// SSE
 			protected.GET("/sse/events", rateLimiter.SSERateLimiter(), sseHandler.Stream)
 
-			// Teacher-specific
 			teacher := protected.Group("/teacher")
 			teacher.Use(middleware.RequireRole("teacher"))
 			{
@@ -125,7 +115,6 @@ func SetupRouter(
 				teacher.DELETE("/delegate/:id", rateLimiter.WriteRateLimiter(), permissionHandler.DeleteDelegation)
 			}
 
-			// Admin-specific
 			admin := protected.Group("/admin")
 			admin.Use(middleware.RequireRole("admin"))
 			admin.Use(rateLimiter.AdminRateLimiter())
@@ -167,7 +156,6 @@ func SetupRouter(
 			}
 		}
 
-		// Dev endpoints
 		api.GET("/dev/registration-token", rateLimiter.DevRateLimiter(), permissionHandler.ListRegistrationTokens)
 		api.POST("/dev/registration-token", rateLimiter.DevRateLimiter(), permissionHandler.UpsertRegistrationToken)
 	}

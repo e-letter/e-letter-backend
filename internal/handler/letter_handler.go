@@ -14,7 +14,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// isValidationError returns true if the error is a user-facing validation error (400) vs internal (500).
 func isValidationError(err error) bool {
 	msg := err.Error()
 	return strings.HasPrefix(msg, "type_id,") ||
@@ -32,8 +31,6 @@ func NewLetterHandler(s service.LetterService, db *sql.DB) *LetterHandler {
 	return &LetterHandler{service: s, db: db}
 }
 
-// KepsekStats returns school-wide aggregate metrics for the principal dashboard.
-// Queries are intentionally un-scoped (global) — no teacher_id / class_id filters.
 func (h *LetterHandler) KepsekStats(c *gin.Context) {
 	type stat struct {
 		key, query string
@@ -55,13 +52,6 @@ func (h *LetterHandler) KepsekStats(c *gin.Context) {
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": stats})
 }
 
-// KepsekPending returns the letters that are currently pending the principal's approval.
-//
-// BUG FIX: The previous route mapped this to TeacherPending which used
-// v_pending_approvals_for_teacher (joins teacher_profiles, approver_teacher_id).
-// Kepsek approvals are stored with approver_principal_id, so those rows were
-// NEVER returned. This handler queries request_approvals directly, resolving
-// the current user's principal_profiles.id from the JWT userId.
 func (h *LetterHandler) KepsekPending(c *gin.Context) {
 	userID := toIntFromContext(c, "userId")
 	if userID <= 0 {
@@ -69,14 +59,12 @@ func (h *LetterHandler) KepsekPending(c *gin.Context) {
 		return
 	}
 
-	// Resolve the principal profile id for this user.
 	var principalID int
 	err := h.db.QueryRow(
 		`SELECT id FROM principal_profiles WHERE user_id = ? AND active = 1 AND deleted_at IS NULL LIMIT 1`,
 		userID,
 	).Scan(&principalID)
 	if err != nil {
-		// Not yet a principal profile — return empty, not an error.
 		response.Raw(c, http.StatusOK, gin.H{
 			"success": true,
 			"data":    gin.H{"data": []any{}, "currentPage": 1, "totalPages": 0, "totalItems": 0},

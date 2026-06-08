@@ -24,19 +24,18 @@ type KepsekConfig struct {
 	Password string
 }
 
-// EmailConfig holds Resend credentials used for sending OTP emails.
 type EmailConfig struct {
-	APIKey     string // RESEND_API_KEY
-	RedirectTo string // EMAIL_REDIRECT_TO
+	APIKey     string
+	RedirectTo string
 }
 
 type AppConfig struct {
 	Env            string
 	Port           string
-	BaseURL        string // Public base URL of the backend, e.g. https://api.example.com
+	BaseURL        string
 	Timezone       string
 	SchoolCode     string
-	TrustedProxies []string // List of trusted proxy IPs
+	TrustedProxies []string
 }
 
 type DBConfig struct {
@@ -45,7 +44,7 @@ type DBConfig struct {
 	User            string
 	Password        string
 	Name            string
-	TLSEnabled      string // "true", "skip-verify", or empty (no TLS)
+	TLSEnabled      string
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLife     time.Duration
@@ -70,19 +69,15 @@ type RedisConfig struct {
 }
 
 type RateLimitConfig struct {
-	// Login endpoints (IP-based) — prevents brute force per source
-	LoginMax    int           // Max login attempts per IP
-	LoginWindow time.Duration // Window for login rate limit
+	LoginMax    int
+	LoginWindow time.Duration
 
-	// Admin/Kepsek login (IP-based, stricter)
 	LoginAdminMax    int
 	LoginAdminWindow time.Duration
 
-	// Registration (IP-based)
 	RegisterMax    int
 	RegisterWindow time.Duration
 
-	// Password reset flow (IP-based) — prevents OTP brute force & email flooding
 	ForgotPasswordMax    int
 	ForgotPasswordWindow time.Duration
 	VerifyOTPMax         int
@@ -90,31 +85,24 @@ type RateLimitConfig struct {
 	ResetPasswordMax     int
 	ResetPasswordWindow  time.Duration
 
-	// Token refresh (IP-based, cookie-driven — no userId available)
 	RefreshMax    int
 	RefreshWindow time.Duration
 
-	// Write operations (user-based) — each user gets own counter
 	WriteMax    int
 	WriteWindow time.Duration
 
-	// Read/list operations (user-based)
 	ReadMax    int
 	ReadWindow time.Duration
 
-	// SSE connections (user-based)
 	SSEMax    int
 	SSEWindow time.Duration
 
-	// Admin panel operations (user-based)
 	AdminMax    int
 	AdminWindow time.Duration
 
-	// Dev endpoints (IP-based)
 	DevMax    int
 	DevWindow time.Duration
 
-	// Global fallback (IP-based) — DoS protection
 	GlobalMax    int
 	GlobalWindow time.Duration
 }

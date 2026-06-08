@@ -6,13 +6,7 @@ import (
 	"strings"
 )
 
-// BuildRBACScopeFilter generates a deny-by-default SQL condition for student scoping based on active teacher roles.
-// Consolidates the teacher_profile + teacher_roles lookup into a single query.
-// Integer values injected via fmt.Sprintf are sourced from the database (not user input), so this is SQL-safe.
 func BuildRBACScopeFilter(db *sql.DB, userID int) (string, error) {
-	// Kepala Sekolah short-circuit: global read-only access per docs/RBAC.md §1.
-	// principal_profiles is a separate table (kepala_sekolah users have no teacher_profiles row),
-	// so they must be detected here, not via the teacher_roles query below.
 	var principalID int64
 	err := db.QueryRow(`
 		SELECT id FROM principal_profiles
@@ -26,7 +20,6 @@ func BuildRBACScopeFilter(db *sql.DB, userID int) (string, error) {
 		return "", err
 	}
 
-	// Single query: resolve teacher profile and active roles in one round trip.
 	rows, err := db.Query(`
 		SELECT tp.id AS teacher_id, tr.role_name
 		FROM teacher_profiles tp
@@ -58,14 +51,12 @@ func BuildRBACScopeFilter(db *sql.DB, userID int) (string, error) {
 		return "1=0", nil
 	}
 
-	// Tatib short-circuit: unrestricted access, no further queries needed.
 	for _, r := range roles {
 		if r.roleName == "tatib" {
 			return "1=1", nil
 		}
 	}
 
-	// Resolve academic year (only needed for non-tatib roles).
 	var academicYearID int64
 	err = db.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&academicYearID)
 	if err != nil {
@@ -75,7 +66,6 @@ func BuildRBACScopeFilter(db *sql.DB, userID int) (string, error) {
 		return "", err
 	}
 
-	// Build conditions for each role. Teacher IDs are int64 from the DB (not user input).
 	var conditions []string
 	for _, r := range roles {
 		tid := r.teacherID

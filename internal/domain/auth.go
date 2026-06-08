@@ -8,7 +8,6 @@ type LoginRequest struct {
 	Password   string `json:"password"`
 }
 
-// GetLoginID returns the effective login identifier, preferring "identifier" over "id"
 func (r *LoginRequest) GetLoginID() string {
 	if r.Identifier != "" {
 		return r.Identifier
@@ -60,8 +59,6 @@ type ResetPasswordRequest struct {
 type AuthRepository interface {
 	GetUserByLoginIdentifiers(id string) (*User, error)
 	GetUserByEmail(email string) (*User, error)
-	// GetUserByEmailAnyStatus returns a user regardless of their status (active/pending/inactive).
-	// Used during registration to prevent duplicate email registrations even for pending accounts.
 	GetUserByEmailAnyStatus(email string) (*User, error)
 	CreateUser(roleID int, email, passwordHash, status string) (int, error)
 	UpdateUserProfile(userID int, fullName string, profileCompleted bool) error

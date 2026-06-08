@@ -197,9 +197,6 @@ func (r *authRepository) GetUserByEmail(email string) (*domain.User, error) {
 	return &user, nil
 }
 
-// GetUserByEmailAnyStatus looks up a user by email regardless of their account status.
-// This is intentionally used during registration to block duplicate email registrations
-// even when an existing account is still in 'pending' state.
 func (r *authRepository) GetUserByEmailAnyStatus(email string) (*domain.User, error) {
 	emails := normalizeEmail(email)
 	var email1, email2, email3 string
@@ -303,10 +300,6 @@ func (r *authRepository) CreateUser(roleID int, email, passwordHash, status stri
 		email, passwordHash, role, status,
 	)
 	if err != nil {
-		// MySQL error 1062 = Duplicate entry — the UNIQUE KEY `uq_email` was violated.
-		// This can happen via a TOCTOU race when two concurrent registrations both pass
-		// the app-level GetUserByEmailAnyStatus check before either INSERT commits.
-		// Return a "terdaftar" error so auth_handler.go maps it to HTTP 409 Conflict.
 		var mysqlErr *mysql.MySQLError
 		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
 			return 0, fmt.Errorf("Email sudah terdaftar")
@@ -402,12 +395,10 @@ func (r *authRepository) GetUserByID(userID int) (*domain.User, error) {
 	return scanUser(row)
 }
 
-// GetRegistrationToken is a no-op: registration_tokens table was removed from the schema.
 func (r *authRepository) GetRegistrationToken(token string) (*domain.TokenRecord, error) {
 	return nil, sql.ErrNoRows
 }
 
-// IncrementRegistrationTokenUsage is a no-op: registration_tokens table was removed from the schema.
 func (r *authRepository) IncrementRegistrationTokenUsage(token string) error {
 	return nil
 }
@@ -442,7 +433,6 @@ func (r *authRepository) GetRefreshToken(tokenHash string) (*domain.TokenRecord,
 	rec.TokenType = "refresh"
 	rec.UsageLimit = nil
 	rec.UsedCount = 0
-	// Track last usage as required by jwt_tokens.last_used_at schema contract.
 	_, _ = r.db.Exec(`UPDATE jwt_tokens SET last_used_at = NOW() WHERE token_hash = ?`, tokenHash)
 	return &rec, nil
 }
@@ -457,7 +447,6 @@ func (r *authRepository) RevokeRefreshTokensByUserID(userID int) error {
 	return err
 }
 
-// LogLoginAttempt logs successful and failed login attempts to the activity_logs table.
 func (r *authRepository) LogLoginAttempt(attempt domain.LoginAttempt) error {
 	var userID *int
 	if attempt.UserID != nil {
@@ -482,8 +471,6 @@ func (r *authRepository) LogLoginAttempt(attempt domain.LoginAttempt) error {
 	return err
 }
 
-// GetTeacherSubRoles fetches active sub-roles for a teacher user.
-// Maps DB role_name to frontend SubRole format.
 func (r *authRepository) GetTeacherSubRoles(userID int) []string {
 	rows, err := r.db.Query(`
 		SELECT tr.role_name
@@ -545,8 +532,6 @@ func scanUser(row *sql.Row) (*domain.User, error) {
 }
 
 func (r *authRepository) CreatePasswordResetToken(userID int, otpCode string, expiresAt time.Time, ip string) error {
-	// Invalidate any previous unused OTPs for this user.
-	// Schema uses used_at IS NULL to denote an active (unused) token.
 	_, _ = r.db.Exec(`UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL`, userID)
 	_, err := r.db.Exec(
 		`INSERT INTO password_reset_tokens (user_id, otp_code, expires_at, ip_address) VALUES (?, ?, ?, ?)`,

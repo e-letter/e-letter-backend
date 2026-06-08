@@ -17,13 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Mock PermissionService
-// ─────────────────────────────────────────────────────────────────────────────
-
-// mockPermissionService is a hand-rolled mock that satisfies the
-// service.PermissionService interface.  Only the methods under test are wired;
-// the rest panic if called unexpectedly so tests fail loudly.
 type mockPermissionService struct {
 	approveFunc func(req domain.ApprovalRequest, approverID int) error
 	deleteFunc  func(id int) error
@@ -64,19 +57,12 @@ func (m *mockPermissionService) CreateDelegation(_, _ int, _, _, _ string) error
 func (m *mockPermissionService) ListDelegations(_ int) (any, error)              { return nil, nil }
 func (m *mockPermissionService) DeleteDelegation(_, _ int) error                 { return nil }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Test helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-// setupRouter creates a Gin router in test mode with the PermissionHandler
-// wired to the provided mock service.
 func setupRouter(svc service.PermissionService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 
 	h := handler.NewPermissionHandler(svc, false, nil)
 
-	// Inject a fake JWT middleware that sets userId=1 and userRole=teacher.
 	authMiddleware := func(c *gin.Context) {
 		c.Set("userId", 1)
 		c.Set("userRole", "teacher")
@@ -90,8 +76,6 @@ func setupRouter(svc service.PermissionService) *gin.Engine {
 	return r
 }
 
-// doRequest executes an HTTP request against the provided router and returns
-// the recorder.
 func doRequest(t *testing.T, router *gin.Engine, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var reqBody *bytes.Buffer
@@ -110,18 +94,13 @@ func doRequest(t *testing.T, router *gin.Engine, method, path string, body any) 
 	return w
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestApprove_Success verifies that a valid Approve request returns 200 OK.
 func TestApprove_Success(t *testing.T) {
 	svc := &mockPermissionService{
 		approveFunc: func(req domain.ApprovalRequest, approverID int) error {
 			assert.Equal(t, 42, req.RequestID)
 			assert.Equal(t, 2, req.StageID)
 			assert.Equal(t, "approved", req.Status)
-			assert.Equal(t, 1, approverID) // injected by fake JWT middleware
+			assert.Equal(t, 1, approverID)
 			return nil
 		},
 	}
@@ -143,8 +122,6 @@ func TestApprove_Success(t *testing.T) {
 	assert.Equal(t, true, resp["success"])
 }
 
-// TestApprove_ServiceError verifies that a service-layer error propagates
-// as a 500 response (not a panic).
 func TestApprove_ServiceError(t *testing.T) {
 	svc := &mockPermissionService{
 		approveFunc: func(_ domain.ApprovalRequest, _ int) error {
@@ -164,7 +141,6 @@ func TestApprove_ServiceError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
-// TestApprove_InvalidStatus verifies that an invalid status value returns 400.
 func TestApprove_InvalidStatus(t *testing.T) {
 	svc := &mockPermissionService{
 		approveFunc: func(_ domain.ApprovalRequest, _ int) error {
@@ -176,28 +152,23 @@ func TestApprove_InvalidStatus(t *testing.T) {
 	payload := map[string]any{
 		"request_id": 42,
 		"stage_id":   2,
-		"status":     "banana", // invalid
+		"status":     "banana",
 	}
 
 	w := doRequest(t, router, http.MethodPost, "/approve", payload)
 
-	// The handler maps this specific error to 400.
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestApprove_MissingBody verifies that an empty body returns 400 Bad Request.
 func TestApprove_MissingBody(t *testing.T) {
 	svc := &mockPermissionService{}
 	router := setupRouter(svc)
 
 	w := doRequest(t, router, http.MethodPost, "/approve", nil)
 
-	// ShouldBindJSON fails → 400.
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestDeleteRequest_MissingID verifies that missing ?id= query param is treated as id=0,
-// and the service returns "id is required", which the handler maps to 400.
 func TestDeleteRequest_MissingID(t *testing.T) {
 	svc := &mockPermissionService{
 		deleteFunc: func(id int) error {
@@ -210,10 +181,8 @@ func TestDeleteRequest_MissingID(t *testing.T) {
 	router := setupRouter(svc)
 
 	req := httptest.NewRequest(http.MethodDelete, "/requests", nil)
-	// Intentionally omit the ?id= parameter.
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	// The handler checks err.Error() == "id is required" → 400.
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }

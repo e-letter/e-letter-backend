@@ -91,7 +91,6 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// Limit 10MB
 	if file.Size > 10*1024*1024 {
 		response.Error(c, http.StatusBadRequest, "Ukuran file maksimal 10MB")
 		return

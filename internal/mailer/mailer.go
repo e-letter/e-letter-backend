@@ -24,15 +24,12 @@ var newEmailSender = func(apiKey string) emailSender {
 	return &resendSDKSender{client: resend.NewClient(apiKey)}
 }
 
-// Mailer is the interface the auth service depends on.
-// Tests can swap in a mock without touching Resend.
 type Mailer interface {
 	SendOTP(toEmail, otp string, expiresAt time.Time) error
 }
 
-// Config holds the Resend credentials loaded from environment variables.
 type Config struct {
-	APIKey string // RESEND_API_KEY
+	APIKey string
 }
 
 type resendMailer struct {
@@ -40,9 +37,6 @@ type resendMailer struct {
 	sender emailSender
 }
 
-// New returns a production Resend mailer.
-// If credentials are not set the mailer falls back to console-only mode so the
-// app boots even when email delivery is not configured yet.
 func New(cfg Config) Mailer {
 	m := &resendMailer{cfg: cfg}
 	if strings.TrimSpace(cfg.APIKey) != "" {
@@ -62,7 +56,6 @@ func (m *resendMailer) SendOTP(toEmail, otp string, expiresAt time.Time) error {
 		return fmt.Errorf("kode OTP kosong")
 	}
 
-	// Skip actual delivery if credentials are not set.
 	if m.sender == nil {
 		return nil
 	}
@@ -84,12 +77,10 @@ func (m *resendMailer) SendOTP(toEmail, otp string, expiresAt time.Time) error {
 	return nil
 }
 
-// buildOTPEmail returns a minimal HTML email body containing the OTP.
 func buildOTPEmail(toEmail, otp string, expiresAt time.Time) string {
-	// Format expiry in WIB (UTC+7)
 	loc := jakartaLocation()
 	expStr := expiresAt.In(loc).Format("02 January 2006 15:04 WIB")
-	_ = toEmail // available for personalisation if needed
+	_ = toEmail
 
 	var sb strings.Builder
 	sb.WriteString(`<!DOCTYPE html>

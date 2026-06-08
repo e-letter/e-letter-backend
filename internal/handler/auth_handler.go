@@ -46,9 +46,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 
 	userID, loginCode, err := h.service.Register(req)
 	if err != nil {
-		// Only map the two specific duplicate-email errors to 409 Conflict.
-		// Avoid matching DB trigger messages like "tidak terdaftar di ref_values"
-		// which contain the same substring but are unrelated validation errors.
 		errMsg := err.Error()
 		if errMsg == "Email sudah terdaftar" || errMsg == "Email sudah terdaftar dan sedang menunggu persetujuan admin" {
 			response.Error(c, http.StatusConflict, errMsg)
@@ -224,7 +221,6 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 	}
 
 	_ = h.service.ForgotPassword(req.Email, c.ClientIP())
-	// Always return success to not reveal if email exists
 	response.Raw(c, http.StatusOK, gin.H{
 		"success": true,
 		"message": "Jika email terdaftar, kode OTP telah dikirim",

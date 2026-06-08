@@ -23,7 +23,6 @@ func NewUserProfileRepository(db *sql.DB) UserProfileRepository {
 }
 
 func (r *userProfileRepository) GetByUserID(userID int) (*domain.User, error) {
-	// Special case for admin with userID=0 (no database user record)
 	if userID == 0 {
 		return &domain.User{
 			ID:                   0,
@@ -109,20 +108,16 @@ func (r *userProfileRepository) Update(userID int, payload domain.UserProfileUpd
 		}
 	}
 
-	// Determine which table to update based on user role
 	var userRole string
 	if err := tx.QueryRow(`SELECT role FROM users WHERE id = ?`, userID).Scan(&userRole); err != nil {
 		return nil, err
 	}
 
-	// Admin users don't have profiles - just return current user
 	if userRole == "admin" {
 		return r.GetByUserID(userID)
 	}
 
-	// Handle class_id via student_class_enrollments (not direct column)
 	if payload.ClassID != nil && userRole == "student" {
-		// Get student profile ID
 		var studentProfileID int
 		err := tx.QueryRow(`SELECT id FROM student_profiles WHERE user_id = ?`, userID).Scan(&studentProfileID)
 		if err != nil {
@@ -170,11 +165,9 @@ func (r *userProfileRepository) Update(userID int, payload domain.UserProfileUpd
 			}
 		}
 
-		// Get active academic year
 		var academicYearID int
 		err = tx.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&academicYearID)
 		if err != nil {
-			// Fallback to latest
 			_ = tx.QueryRow(`SELECT id FROM academic_years ORDER BY id DESC LIMIT 1`).Scan(&academicYearID)
 		}
 		if academicYearID > 0 {
@@ -319,7 +312,6 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 	}
 	defer tx.Rollback()
 
-	// 1. Insert/Update base teacher profile
 	var teacherID int64
 	err = tx.QueryRow(`SELECT id FROM teacher_profiles WHERE user_id = ?`, payload.UserID).Scan(&teacherID)
 	if err != nil {
@@ -341,7 +333,7 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 		}
 	} else {
 		_, err = tx.Exec(
-			`UPDATE teacher_profiles 
+			`UPDATE teacher_profiles
 			 SET full_name = ?, employee_code = ?, gender = ?, signature_url = ?, active = 1, updated_at = NOW()
 			 WHERE id = ?`,
 			payload.FullName, payload.NIP, payload.Gender, payload.SignatureUrl, teacherID,
@@ -351,25 +343,21 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 		}
 	}
 
-	// 2. Fetch active academic year
 	var academicYearID int64
 	err = tx.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&academicYearID)
 	if err != nil {
-		// Fallback to latest
 		_ = tx.QueryRow(`SELECT id FROM academic_years ORDER BY id DESC LIMIT 1`).Scan(&academicYearID)
 	}
 	if academicYearID == 0 {
 		return nil, fmt.Errorf("tidak ada tahun ajaran aktif")
 	}
 
-	// 3. Clear existing roles and assignments for this teacher to prevent duplicates/orphans
 	_, _ = tx.Exec(`DELETE FROM teacher_roles WHERE teacher_id = ?`, teacherID)
 	_, _ = tx.Exec(`UPDATE class_homeroom_assignments SET is_active = 0 WHERE teacher_id = ? AND academic_year_id = ?`, teacherID, academicYearID)
 	_, _ = tx.Exec(`UPDATE major_head_assignments SET is_active = 0 WHERE teacher_id = ? AND academic_year_id = ?`, teacherID, academicYearID)
 	_, _ = tx.Exec(`DELETE FROM teacher_subjects WHERE teacher_id = ? AND academic_year_id = ?`, teacherID, academicYearID)
 	_, _ = tx.Exec(`DELETE FROM schedules WHERE teacher_id = ? AND academic_year_id = ?`, teacherID, academicYearID)
 
-	// Precompute expected staging values per selected role.
 	expectedRoles := make(map[string]struct{}, len(payload.Roles))
 	for _, roleName := range payload.Roles {
 		expectedRoles[roleName] = struct{}{}
@@ -378,7 +366,6 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 	var expectedSubjectIDsStr sql.NullString
 	if _, ok := expectedRoles["guru_mapel"]; ok {
 		if len(payload.Subjects) == 0 {
-			// Fail fast rather than inserting an inconsistent guru_mapel role.
 			return nil, fmt.Errorf("guru_mapel dipilih tetapi tidak ada subjects")
 		}
 		parts := make([]string, len(payload.Subjects))
@@ -389,7 +376,6 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 		expectedSubjectIDsStr.Valid = true
 	}
 
-	// 4. Process each selected role
 	for _, roleName := range payload.Roles {
 		var homeroomClassID sql.NullInt64
 		var majorID sql.NullInt64
@@ -403,7 +389,6 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 			homeroomClassID.Int64 = int64(payload.HomeroomClassID)
 			homeroomClassID.Valid = true
 
-			// Deactivate existing Wakel for this class (one active per class)
 			_, err = tx.Exec(
 				`UPDATE class_homeroom_assignments SET is_active = 0, updated_at = NOW()
 				 WHERE class_id = ? AND academic_year_id = ?`,
@@ -413,7 +398,6 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 				return nil, fmt.Errorf("gagal menonaktifkan wali kelas lama: %w", err)
 			}
 
-			// Insert/activate new Wakel assignment
 			_, err = tx.Exec(
 				`INSERT INTO class_homeroom_assignments (class_id, teacher_id, academic_year_id, is_active)
 				 VALUES (?, ?, ?, 1)
@@ -431,7 +415,6 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 			majorID.Int64 = int64(payload.MajorID)
 			majorID.Valid = true
 
-			// Deactivate existing Kapro for this major (one active per major)
 			_, err = tx.Exec(
 				`UPDATE major_head_assignments SET is_active = 0, updated_at = NOW()
 				 WHERE major_id = ? AND academic_year_id = ?`,
@@ -452,13 +435,11 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 			}
 
 		case "guru_mapel":
-			// teacher_roles staging should always match selected subjects
 			if !expectedSubjectIDsStr.Valid {
 				return nil, fmt.Errorf("guru_mapel dipilih tetapi subject staging tidak valid")
 			}
 			subjectIDsStr = expectedSubjectIDsStr
 
-			// Insert teacher_subjects rows
 			for _, subjID := range payload.Subjects {
 				_, err = tx.Exec(
 					`INSERT INTO teacher_subjects (teacher_id, subject_id, academic_year_id, is_permanent, is_active)
@@ -471,7 +452,6 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 				}
 			}
 
-			// Insert schedules rows
 			for _, sched := range payload.Schedules {
 				_, err = tx.Exec(
 					`INSERT INTO schedules (academic_year_id, class_id, subject_id, teacher_id, day_of_week, start_time, end_time, is_active)
@@ -484,19 +464,15 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 			}
 
 		case "tatib":
-			// 'tatib' is a general administrative role that does not require additional class/major assignments.
 			break
 
 		case "pembina":
-			// 'pembina' can create dispensasi letters and can only see their own dispensasi letters.
-			// No additional class/major/subject assignments required.
 			break
 
 		default:
 			return nil, fmt.Errorf("role guru tidak dikenal: %s", roleName)
 		}
 
-		// Save the active role to teacher_roles
 		_, err = tx.Exec(
 			`INSERT INTO teacher_roles (teacher_id, role_name, academic_year_id, status, homeroom_class_id, major_id, subject_ids)
 			 VALUES (?, ?, ?, 'active', ?, ?, ?)
@@ -508,8 +484,6 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 		}
 	}
 
-	// 5. Transactional verification: ensure teacher_roles active rows match selected roles.
-	//    This prevents silent partial writes from being accepted.
 	for roleName := range expectedRoles {
 		var count int
 		err = tx.QueryRow(`
@@ -525,7 +499,6 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 		}
 	}
 
-	// Verify staging columns for each role type.
 	if _, ok := expectedRoles["wali_kelas"]; ok {
 		var got sql.NullInt64
 		if err := tx.QueryRow(`
@@ -568,7 +541,6 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 		}
 	}
 
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -577,7 +549,6 @@ func (r *userProfileRepository) CompleteTeacherOnboarding(payload domain.Complet
 }
 
 func (r *userProfileRepository) GetSchedules(userID int) ([]domain.ScheduleDetail, error) {
-	// First get academic_year_id of active academic year
 	var academicYearID int
 	err := r.db.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&academicYearID)
 	if err != nil {
@@ -603,7 +574,6 @@ func (r *userProfileRepository) GetSchedules(userID int) ([]domain.ScheduleDetai
 		if err := rows.Scan(&s.ClassID, &s.SubjectID, &s.DayOfWeek, &startTime, &endTime); err != nil {
 			return nil, err
 		}
-		// Convert "HH:MM:SS" to "HH:MM"
 		s.StartTime = formatTime(startTime)
 		s.EndTime = formatTime(endTime)
 		schedules = append(schedules, s)

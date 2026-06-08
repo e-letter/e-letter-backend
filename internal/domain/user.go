@@ -9,7 +9,6 @@ type User struct {
 	Role     string  `json:"role" db:"role"`
 	Status   string  `json:"status" db:"status"`
 
-	// Computed from profile JOINs — not direct columns in users table
 	FullName             *string    `json:"full_name,omitempty"`
 	StudentCode          *string    `json:"student_code,omitempty"`
 	EmployeeCode         *string    `json:"employee_code,omitempty"`

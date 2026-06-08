@@ -39,13 +39,11 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 		return 0, errors.New("type_id diperlukan")
 	}
 
-	// Phase 1c: Validate user existence and role
 	userRole, err := s.repo.GetUserRole(userID)
 	if err != nil {
 		return 0, errors.New("User pengaju tidak ditemukan")
 	}
 
-	// Phase 1c: Validate request type existence
 	typeInfo, err := s.repo.GetRequestTypeInfo(req.TypeID)
 	if err != nil {
 		return 0, errors.New("Jenis surat tidak ditemukan")
@@ -54,7 +52,6 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 		return 0, errors.New("Jenis surat tidak aktif")
 	}
 
-	// Phase 1c: Validate role matches request type
 	if typeInfo.RequesterRole == "student" && userRole != "student" {
 		return 0, errors.New("Izin keluar/masuk hanya boleh diajukan oleh siswa")
 	}
@@ -69,7 +66,6 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 		req.EndTime = req.StartTime
 	}
 
-	// Determine the effective date: use request_date if provided, extract from start_time, or today
 	effectiveDate := strings.TrimSpace(req.RequestDate)
 	if effectiveDate == "" {
 		effectiveDate = extractDateFromTime(req.StartTime)
@@ -78,7 +74,6 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 		effectiveDate = time.Now().Format("2006-01-02")
 	}
 
-	// Phase 1d: Rate limit — students cannot have duplicate pending/approved requests for same type+date
 	if userRole == "student" {
 		hasActive, err := s.repo.HasActiveRequest(userID, req.TypeID, effectiveDate)
 		if err != nil {
@@ -89,12 +84,10 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 		}
 	}
 
-	// Validate date is not weekend
 	if err := validateNotWeekend(effectiveDate); err != nil {
 		return 0, err
 	}
 
-	// Extract and validate time is within school hours
 	startTime := extractTimePart(req.StartTime)
 	endTime := extractTimePart(req.EndTime)
 	if startTime == "" || endTime == "" {
@@ -138,8 +131,6 @@ func (s *letterService) ListForTeacher(typeKey string, page, limit int) (*domain
 }
 
 func (s *letterService) ListForTeacherScoped(userID int, typeKey string, page, limit int) (*domain.PaginatedLetterResponse, error) {
-	// Kepala Sekolah (principal_profiles) has global read access per docs/RBAC.md §1;
-	// skip the teacher_roles check for them since they have no teacher_profiles row.
 	isPrincipal, err := s.repo.IsActivePrincipal(userID)
 	if err != nil {
 		return nil, err
@@ -187,40 +178,32 @@ func (s *letterService) GetTeacherStats(userID int) (map[string]any, error) {
 		"rejected": 0,
 		"pending":  0,
 	}
-	// These queries use the request_approvals table
 	type countQuery struct {
 		key   string
 		query string
 	}
-	// We don't have direct DB access here, so delegate to repo
-	// For now, return empty stats - will be populated when repo method is added
 	return stats, nil
 }
 
-// extractTimePart extracts HH:MM:SS from either "HH:MM:SS" or "YYYY-MM-DD HH:MM:SS" format.
 func extractTimePart(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return ""
 	}
 	if len(s) > 8 {
-		// Full datetime "YYYY-MM-DD HH:MM:SS" — take just the time part after space
 		if idx := strings.Index(s, " "); idx > 0 && idx+1 < len(s) {
 			s = strings.TrimSpace(s[idx+1:])
 		}
 	}
-	// Normalize HH:MM to HH:MM:SS
 	if len(s) == 5 {
 		s = s + ":00"
 	}
 	return s
 }
 
-// extractDateFromTime attempts to extract YYYY-MM-DD from a datetime string.
 func extractDateFromTime(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) >= 10 {
-		// Check if it looks like a date prefix
 		datePart := s[:10]
 		if len(datePart) == 10 && datePart[4] == '-' && datePart[7] == '-' {
 			return datePart
@@ -229,7 +212,6 @@ func extractDateFromTime(s string) string {
 	return ""
 }
 
-// validateNotWeekend checks that the given YYYY-MM-DD date is not Saturday or Sunday.
 func validateNotWeekend(date string) error {
 	t, err := time.Parse("2006-01-02", date)
 	if err != nil {
@@ -241,7 +223,6 @@ func validateNotWeekend(date string) error {
 	return nil
 }
 
-// validateSchoolHours checks that start and end times are within school operating hours.
 func validateSchoolHours(startTime, endTime string) error {
 	parseTimeOnly := func(s string) (int, int, error) {
 		parts := strings.Split(s, ":")
@@ -266,7 +247,6 @@ func validateSchoolHours(startTime, endTime string) error {
 
 	startTotal := startH*60 + startM
 
-	// School hours: 07:00 (420 min) to 15:00 (900 min)
 	if startTotal < 420 || startTotal > 900 {
 		return fmt.Errorf("jam mulai (%02d:%02d) di luar jam operasional sekolah (07:00 - 15:00 WIB)", startH, startM)
 	}

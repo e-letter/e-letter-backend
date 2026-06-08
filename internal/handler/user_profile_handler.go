@@ -107,7 +107,6 @@ func (h *UserProfileHandler) UploadSignature(c *gin.Context) {
 		return
 	}
 
-	// Validate role against allowlist to prevent path traversal
 	allowedRoles := map[string]bool{
 		"student":        true,
 		"teacher":        true,
@@ -132,7 +131,6 @@ func (h *UserProfileHandler) UploadSignature(c *gin.Context) {
 		return
 	}
 
-	// Verify resolved path stays within the signatures directory
 	absSignaturesDir, err := filepath.Abs(signaturesDir)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "Gagal memproses path")
@@ -153,7 +151,6 @@ func (h *UserProfileHandler) UploadSignature(c *gin.Context) {
 		return
 	}
 
-	// Build the public URL for this signature file.
 	signatureURL := strings.TrimRight(h.baseURL, "/") + "/signatures/" + filename
 	utils.LogActivity(h.db, int64(userID), "upload_signature", "Unggah tanda tangan user ID #"+strconv.Itoa(userID), c.ClientIP(), c.Request.UserAgent())
 	response.Success(c, http.StatusOK, "Tanda tangan berhasil disimpan", gin.H{"signature_url": signatureURL})
@@ -167,7 +164,6 @@ func (h *UserProfileHandler) CompleteOnboarding(c *gin.Context) {
 	}
 	userID, _ := userIDVal.(int)
 
-	// Fetch current user profile to determine their role
 	user, err := h.service.GetProfile(userID)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "Gagal mengambil data profil: "+err.Error())
@@ -200,7 +196,6 @@ func (h *UserProfileHandler) CompleteOnboarding(c *gin.Context) {
 		return
 	}
 
-	// For student and others
 	var req struct {
 		FullName          *string `json:"fullName"`
 		FullNameSnake     *string `json:"full_name"`

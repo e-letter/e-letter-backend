@@ -91,7 +91,6 @@ func TestJakartaLocationFallback(t *testing.T) {
 		t.Fatal("expected location to be returned")
 	}
 
-	// The fallback uses WIB offset when the zone database is unavailable.
 	_, offset := time.Now().In(loc).Zone()
 	if offset != 7*60*60 {
 		t.Fatalf("expected WIB offset, got %d", offset)

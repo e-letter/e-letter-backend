@@ -6,23 +6,7 @@ import (
 	"fmt"
 )
 
-// ValidateApprovalStep verifies that prior steps are completed and the caller is authorized.
-// Returns (callerTeacherID, callerPrincipalID, approverRole, isDelegated, delegatedFromID, error)
-//
-// Approval flow for izin_keluar (RBAC.md §9):
-//
-//	Normal (≤30 min): guru_mapel (step 1) → tatib (step 2)
-//	  – strictly sequential; each role must approve before the next step unlocks.
-//
-//	Bypass (>30 min): kapro is NOT a step — it is a bypass authority only.
-//	  – If guru_mapel has not approved within 30 minutes, kapro may
-//	    approve their pending step on their behalf (that step is auto-skipped in Approve()).
-//	  – Tatib is ALWAYS the mandatory final approver and is NEVER bypassable.
-//
-//	Multi-role: if the approver holds multiple overlapping roles, Approve() cascades
-//	  auto-approvals across all steps they are authorised for.
 func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID int) (int64, int64, string, bool, int64, error) {
-	// 1. Resolve caller's internal profile IDs — consolidate into a single query.
 	var callerTeacherID sql.NullInt64
 	var callerPrincipalID sql.NullInt64
 	err := tx.QueryRow(`
@@ -36,7 +20,6 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 		return 0, 0, "", false, 0, fmt.Errorf("resolve approver profiles: %w", err)
 	}
 
-	// 2. Check elapsed time since the request was submitted (use submitted_at for precision)
 	var elapsedMinutes int
 	var requestCode string
 	err = tx.QueryRow(`
@@ -49,10 +32,8 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 		return 0, 0, "", false, 0, err
 	}
 
-	// isIzinKeluarLate: true when the 30-minute window has elapsed for an izin_keluar request
 	isIzinKeluarLate := requestCode == "izin_keluar" && elapsedMinutes > 30
 
-	// 3. Load all approval steps for sequential-order verification
 	rows, err := tx.Query(`
 		SELECT step_no, approver_role, status, approver_teacher_id, approver_principal_id
 		FROM request_approvals
@@ -94,8 +75,6 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 		return 0, 0, "", false, 0, errors.New("approval step not found for this request")
 	}
 
-	// 4. Determine whether the caller is kapro (required for the bypass eligibility check).
-	//    Only query if bypass is even possible (late izin_keluar + caller has a teacher profile).
 	callerIsKapro := false
 	if isIzinKeluarLate && callerTeacherID.Valid {
 		if err := tx.QueryRow(`
@@ -108,15 +87,9 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 		}
 	}
 
-	// bypassableRoles: roles that kapro may approve on behalf of after the 30-minute window.
-	// Per RBAC.md §9 the izin_keluar flow is guru_mapel → tatib; only guru_mapel is bypassable.
-	// tatib is intentionally excluded — it is always the mandatory final approver.
 	bypassableRoles := map[string]bool{"guru_mapel": true}
 	isKaproBypassingThisStep := isIzinKeluarLate && callerIsKapro && bypassableRoles[targetStep.approverRole]
 
-	// 5. Sequential-order enforcement.
-	//    Kapro may skip over still-pending guru_mapel/wali_kelas steps after 30 minutes.
-	//    Tatib step is ALWAYS sequential regardless of elapsed time.
 	if !isKaproBypassingThisStep {
 		for _, s := range allSteps {
 			if s.stepNo < stepNo && s.status == "pending" {
@@ -127,25 +100,19 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 		}
 	}
 
-	// 6. Guard: step must still be pending
 	if targetStep.status != "pending" {
 		return 0, 0, "", false, 0, errors.New("Langkah persetujuan ini sudah diproses.")
 	}
 
-	// 7. Role-authority check
 	isDelegated := false
 	var delegatedFromID int64
 
-	// Kapro bypass path: kapro approves on behalf of guru_mapel or wali_kelas.
-	// The Approve() function will record kapro's teacher ID on the step and then
-	// auto-skip any remaining bypassable pending steps.
 	if isKaproBypassingThisStep {
 		return callerTeacherID.Int64, 0, targetStep.approverRole, false, 0, nil
 	}
 
 	switch targetStep.approverRole {
 	case "tatib":
-		// Any teacher holding an active 'tatib' role may approve
 		if !callerTeacherID.Valid {
 			return 0, 0, "", false, 0, errors.New("Anda harus memiliki profil guru yang aktif untuk menyetujui langkah ini.")
 		}
@@ -172,10 +139,9 @@ func ValidateApprovalStep(tx *sql.Tx, requestID int, stepNo int, approverUserID 
 		assignedTeacherID := targetStep.approverTeacherID.Int64
 
 		if assignedTeacherID == callerTeacherID.Int64 {
-			break // direct match
+			break
 		}
 
-		// Check for active delegation from the assigned teacher to the caller
 		var activeDelegationExists bool
 		if err = tx.QueryRow(`
 			SELECT EXISTS(

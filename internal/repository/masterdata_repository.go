@@ -8,7 +8,6 @@ import (
 	"github.com/Refliqx/backend-eletter/internal/domain"
 )
 
-// MasterDataRepository defines methods for master data access
 type MasterDataRepository interface {
 	GetAllClasses(ctx context.Context) ([]domain.Class, error)
 	GetClassByID(ctx context.Context, id int64) (*domain.Class, error)
@@ -19,17 +18,14 @@ type MasterDataRepository interface {
 	GetStudents(ctx context.Context, classID, majorID *int64) ([]domain.StudentProfile, error)
 }
 
-// masterDataRepository implements MasterDataRepository
 type masterDataRepository struct {
 	db *sql.DB
 }
 
-// NewMasterDataRepository creates a new master data repository
 func NewMasterDataRepository(db *sql.DB) MasterDataRepository {
 	return &masterDataRepository{db: db}
 }
 
-// GetAllClasses retrieves all active classes
 func (r *masterDataRepository) GetAllClasses(ctx context.Context) ([]domain.Class, error) {
 	query := `
 		SELECT id, academic_year_id, major_id, grade_level, class_name, is_active, created_at, updated_at
@@ -56,7 +52,6 @@ func (r *masterDataRepository) GetAllClasses(ctx context.Context) ([]domain.Clas
 	return classes, rows.Err()
 }
 
-// GetClassByID retrieves a class by ID
 func (r *masterDataRepository) GetClassByID(ctx context.Context, id int64) (*domain.Class, error) {
 	query := `
 		SELECT id, academic_year_id, major_id, grade_level, class_name, is_active, created_at, updated_at
@@ -75,7 +70,6 @@ func (r *masterDataRepository) GetClassByID(ctx context.Context, id int64) (*dom
 	return &c, nil
 }
 
-// GetAllMajors retrieves all active majors
 func (r *masterDataRepository) GetAllMajors(ctx context.Context) ([]domain.Major, error) {
 	query := `
 		SELECT id, code, name, is_active, created_at, updated_at
@@ -102,7 +96,6 @@ func (r *masterDataRepository) GetAllMajors(ctx context.Context) ([]domain.Major
 	return majors, rows.Err()
 }
 
-// GetMajorByID retrieves a major by ID
 func (r *masterDataRepository) GetMajorByID(ctx context.Context, id int64) (*domain.Major, error) {
 	query := `
 		SELECT id, code, name, is_active, created_at, updated_at
@@ -121,7 +114,6 @@ func (r *masterDataRepository) GetMajorByID(ctx context.Context, id int64) (*dom
 	return &m, nil
 }
 
-// GetStudentsByClass retrieves all students in a class via student_class_enrollments
 func (r *masterDataRepository) GetStudentsByClass(ctx context.Context, classID int64) ([]domain.StudentProfile, error) {
 	query := `
 		SELECT sp.id, sp.user_id, sp.student_code, sp.full_name, sp.gender, sp.birth_date,
@@ -155,7 +147,6 @@ func (r *masterDataRepository) GetStudentsByClass(ctx context.Context, classID i
 	return students, rows.Err()
 }
 
-// GetStudentByID retrieves a student by ID
 func (r *masterDataRepository) GetStudentByID(ctx context.Context, id int64) (*domain.StudentProfile, error) {
 	query := `
 		SELECT sp.id, sp.user_id, sp.student_code, sp.full_name, sp.gender, sp.birth_date,
@@ -181,7 +172,6 @@ func (r *masterDataRepository) GetStudentByID(ctx context.Context, id int64) (*d
 	return &s, nil
 }
 
-// GetStudents retrieves students with optional filters for class_id and major_id
 func (r *masterDataRepository) GetStudents(ctx context.Context, classID, majorID *int64) ([]domain.StudentProfile, error) {
 	query := `
 		SELECT sp.id, sp.user_id, sp.student_code, sp.full_name, sp.gender, sp.birth_date,

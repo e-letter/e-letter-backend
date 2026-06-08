@@ -47,8 +47,8 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 	search := c.Query("search")
 
 	query := `SELECT u.id, u.email, u.role, u.status, COALESCE(tp.full_name, sp.full_name, ap.full_name, pp.full_name, '') as full_name
-		FROM users u 
-		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id 
+		FROM users u
+		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
 		LEFT JOIN admin_profiles ap ON ap.user_id = u.id
 		LEFT JOIN principal_profiles pp ON pp.user_id = u.id
@@ -124,8 +124,6 @@ func (h *AdminHandler) UpdateUserStatus(c *gin.Context) {
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Status berhasil diperbarui"})
 }
 
-// knownRoles mirrors the canonical role values used across the system.
-// Keep in sync with DB role_name values.
 var knownRoles = map[string]bool{
 	"student":        true,
 	"teacher":        true,
@@ -153,12 +151,6 @@ func roleProfileHasDeletedAt(role string) bool {
 	return role == "student" || role == "teacher"
 }
 
-// UpdateUser allows an admin to change a user's role and/or full_name.
-// Body: {"role": "student|teacher|kepala_sekolah|admin", "full_name": "..."} - both optional.
-// When the role changes, the existing profile (if any) for the old role is
-// soft-deleted and a new profile row is created for the new role with the
-// provided (or existing) full_name. If the new role is unchanged but a
-// full_name is supplied, the matching profile row's full_name is updated.
 func (h *AdminHandler) UpdateUser(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -190,7 +182,6 @@ func (h *AdminHandler) UpdateUser(c *gin.Context) {
 	}
 	defer tx.Rollback()
 
-	// Lock the user row.
 	var currentRole string
 	var currentStatus string
 	err = tx.QueryRow(`SELECT role, status FROM users WHERE id = ? AND deleted_at IS NULL FOR UPDATE`, id).Scan(&currentRole, &currentStatus)
@@ -208,7 +199,6 @@ func (h *AdminHandler) UpdateUser(c *gin.Context) {
 		targetRole = *body.Role
 	}
 
-	// Update the canonical users table.
 	if body.Role != nil {
 		if _, err := tx.Exec(`UPDATE users SET role = ?, updated_at = NOW() WHERE id = ?`, *body.Role, id); err != nil {
 			response.Error(c, http.StatusInternalServerError, err.Error())
@@ -216,7 +206,6 @@ func (h *AdminHandler) UpdateUser(c *gin.Context) {
 		}
 	}
 
-	// Resolve the full_name to apply: explicit body value wins, else keep existing.
 	newFullName := ""
 	if body.FullName != nil {
 		newFullName = strings.TrimSpace(*body.FullName)
@@ -228,7 +217,6 @@ func (h *AdminHandler) UpdateUser(c *gin.Context) {
 		).Scan(&newFullName)
 	}
 
-	// Soft-delete the old role's profile (if it has a profile table).
 	oldTable := roleProfileTable(currentRole)
 	if oldTable != "" && currentRole != targetRole {
 		if roleProfileHasDeletedAt(currentRole) {
@@ -240,15 +228,11 @@ func (h *AdminHandler) UpdateUser(c *gin.Context) {
 				return
 			}
 		} else {
-			// admin_profiles and principal_profiles have no deleted_at; just leave them
-			// (admin may keep a parallel principal profile record even after role switch).
 		}
 	}
 
-	// Update or insert profile for the target role.
 	newTable := roleProfileTable(targetRole)
 	if newTable != "" {
-		// If the same table for the same user exists and is active, update full_name.
 		if roleProfileHasDeletedAt(targetRole) {
 			res, err := tx.Exec(
 				fmt.Sprintf(`UPDATE %s SET full_name = ?, updated_at = NOW() WHERE user_id = ? AND deleted_at IS NULL`, newTable),
@@ -260,7 +244,6 @@ func (h *AdminHandler) UpdateUser(c *gin.Context) {
 			}
 			affected, _ := res.RowsAffected()
 			if affected == 0 {
-				// No active profile: insert a fresh one. Default required columns to safe placeholders.
 				switch targetRole {
 				case "student":
 					if _, err := tx.Exec(
@@ -281,7 +264,6 @@ func (h *AdminHandler) UpdateUser(c *gin.Context) {
 				}
 			}
 		} else {
-			// admin / principal - update the most recent record; insert if none.
 			res, err := tx.Exec(
 				fmt.Sprintf(`UPDATE %s SET full_name = ?, updated_at = NOW() WHERE user_id = ?`, newTable),
 				newFullName, id,
@@ -357,9 +339,6 @@ func (h *AdminHandler) UpdateUser(c *gin.Context) {
 	})
 }
 
-// CreateUser lets an admin provision a new account directly (no token required).
-// Useful for the "Tambah Pengguna" UI on /admin/pengguna where the admin needs
-// to create a user without going through the public registration flow.
 func (h *AdminHandler) CreateUser(c *gin.Context) {
 	var body struct {
 		FullName string `json:"full_name" binding:"required"`
@@ -378,9 +357,6 @@ func (h *AdminHandler) CreateUser(c *gin.Context) {
 		return
 	}
 
-	// Username-based roles (admin, kepala_sekolah, tu) get an auto-generated
-	// username like ADM-001, KS-001, TU-001 and set email to NULL.
-	// Email-based roles (student, teacher) keep the email and set username to NULL.
 	usernameRoles := map[string]string{
 		"admin":          "ADM",
 		"kepala_sekolah": "KS",
@@ -393,7 +369,6 @@ func (h *AdminHandler) CreateUser(c *gin.Context) {
 	rawEmail := strings.ToLower(strings.TrimSpace(body.Email))
 
 	if usesUsername {
-		// Generate sequential username.
 		var lastNum int
 		err := h.db.QueryRow(
 			`SELECT COALESCE(MAX(CAST(SUBSTRING_INDEX(username, '-', -1) AS UNSIGNED)), 0) FROM users WHERE username LIKE ? AND deleted_at IS NULL`,
@@ -407,11 +382,9 @@ func (h *AdminHandler) CreateUser(c *gin.Context) {
 		username = &generated
 		email = nil
 	} else {
-		// Email-based roles.
 		email = &rawEmail
 		username = nil
 
-		// Reject duplicates up-front so the user gets a clear message.
 		var existingID int
 		err := h.db.QueryRow(`SELECT id FROM users WHERE email = ? AND deleted_at IS NULL`, rawEmail).Scan(&existingID)
 		if err == nil {
@@ -558,8 +531,6 @@ func (h *AdminHandler) CreateUser(c *gin.Context) {
 	})
 }
 
-// AdminDeleteLetter force-deletes any permission request, regardless of
-// ownership. Soft-delete via requests.deleted_at; only admins may call it.
 func (h *AdminHandler) AdminDeleteLetter(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -575,7 +546,6 @@ func (h *AdminHandler) AdminDeleteLetter(c *gin.Context) {
 	}
 	defer tx.Rollback()
 
-	// Lock and read metadata for audit + cascade decisions.
 	var requesterUserID int64
 	var requestNumber sql.NullString
 	var letterType sql.NullString
@@ -616,10 +586,6 @@ func (h *AdminHandler) AdminDeleteLetter(c *gin.Context) {
 		c.ClientIP(),
 		c.GetHeader("User-Agent"),
 	)
-
-	// Best-effort SSE refresh so the affected user's UI updates.
-	// (notification_publisher would normally be injected; admin handler has
-	// access to the raw db only. We rely on clients polling or a 5s refresh.)
 
 	response.Raw(c, http.StatusOK, gin.H{
 		"success": true,
@@ -759,7 +725,6 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 	}
 	defer tx.Rollback()
 
-	// Lock the row and read metadata needed for assignment writes.
 	var roleName string
 	var teacherID int
 	var academicYearID int
@@ -777,7 +742,6 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 		return
 	}
 
-	// Activate the role.
 	if _, err := tx.Exec(
 		`UPDATE teacher_roles SET status = 'active', verified_at = NOW(), verified_by = ? WHERE id = ?`,
 		adminUserID, id,
@@ -786,11 +750,9 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 		return
 	}
 
-	// Write to the canonical assignment table based on role type.
 	switch roleName {
 	case "wali_kelas":
 		if homeroomClassID.Valid {
-			// Deactivate any existing assignment for this class first (one class, one wali).
 			if _, err := tx.Exec(
 				`UPDATE class_homeroom_assignments SET is_active = 0, updated_at = NOW()
 				  WHERE class_id = ? AND academic_year_id = ?`,
@@ -812,7 +774,6 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 
 	case "kapro":
 		if majorID.Valid {
-			// Deactivate existing kapro for this major.
 			if _, err := tx.Exec(
 				`UPDATE major_head_assignments SET is_active = 0, updated_at = NOW()
 				  WHERE major_id = ? AND academic_year_id = ?`,
@@ -834,7 +795,6 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 
 	case "guru_mapel":
 		if subjectIDsRaw.Valid && subjectIDsRaw.String != "" {
-			// Get all active classes for this academic year to create schedules.
 			rows, err := tx.Query(
 				`SELECT id FROM classes WHERE academic_year_id = ? AND is_active = 1`,
 				academicYearID,
@@ -851,7 +811,6 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 			}
 			rows.Close()
 
-			// Parse comma-separated subject IDs.
 			parts := strings.Split(subjectIDsRaw.String, ",")
 			for _, part := range parts {
 				part = strings.TrimSpace(part)
@@ -863,8 +822,6 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 					continue
 				}
 				for _, classID := range classIDs {
-					// Use senin as default day; the schedule can be updated by admin later.
-					// start_time/end_time default to school start (07:00 – 08:00).
 					if _, err := tx.Exec(
 						`INSERT IGNORE INTO schedules
 							(academic_year_id, class_id, subject_id, teacher_id,
@@ -1031,7 +988,6 @@ func (h *AdminHandler) RejectTeacherRole(c *gin.Context) {
 			return
 		}
 
-		// Set status of user to 'inactive' (rejected registration) and de-activate teacher profile, WITHOUT soft deleting
 		if _, err := tx.Exec(`UPDATE users SET status = 'inactive', updated_at = NOW() WHERE id = ?`, userID); err != nil {
 			response.Error(c, http.StatusInternalServerError, err.Error())
 			return
@@ -1060,7 +1016,7 @@ func (h *AdminHandler) RejectTeacherRole(c *gin.Context) {
 	var body struct {
 		Reason string `json:"reason"`
 	}
-	_ = c.ShouldBindJSON(&body) // reason is optional
+	_ = c.ShouldBindJSON(&body)
 	_, err = h.db.Exec(
 		`UPDATE teacher_roles SET status = 'rejected', verified_by = ?, verified_at = NOW(), updated_at = NOW() WHERE id = ?`,
 		adminUserID, id,
@@ -1440,7 +1396,6 @@ func (h *AdminHandler) CreateEnrollment(c *gin.Context) {
 		h.db.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&body.AcademicYearID)
 	}
 
-	// Normalize notes: NULL/empty-string both become nil so the column stays NULL in DB.
 	var notes *string
 	if body.Notes != nil {
 		trimmed := strings.TrimSpace(*body.Notes)
@@ -1449,8 +1404,6 @@ func (h *AdminHandler) CreateEnrollment(c *gin.Context) {
 		}
 	}
 
-	// Default to the existing promotion_note column. promotion_status stays 'active'
-	// so the student is enrolled in the destination class for the target academic year.
 	_, err := h.db.Exec(
 		`INSERT INTO student_class_enrollments (student_id, class_id, academic_year_id, is_active, promotion_note) VALUES (?, ?, ?, 1, ?)`,
 		body.StudentID, body.ClassID, body.AcademicYearID, notes,
@@ -1526,7 +1479,6 @@ func (h *AdminHandler) GetPrincipalConfig(c *gin.Context) {
 		LIMIT 1
 	`).Scan(&fullName, &signatureURL)
 	if err != nil {
-		// Return empty data rather than error so the print still works
 		response.Raw(c, http.StatusOK, gin.H{
 			"success": true,
 			"data":    gin.H{"full_name": "", "signature_url": ""},
@@ -1560,7 +1512,6 @@ func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
 		return
 	}
 
-	// Validate config key
 	allowedKeys := map[string]bool{
 		"illustration_login_orange": true,
 		"illustration_login_blue":   true,
@@ -1574,7 +1525,6 @@ func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
 		return
 	}
 
-	// Sanitize configKey: reject path separators and ".." sequences for defense-in-depth
 	if strings.Contains(configKey, "/") || strings.Contains(configKey, "\\") || strings.Contains(configKey, "..") {
 		response.Error(c, http.StatusBadRequest, "config_key tidak valid")
 		return
@@ -1586,7 +1536,6 @@ func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
 		return
 	}
 
-	// Limit 5MB
 	if file.Size > 5*1024*1024 {
 		response.Error(c, http.StatusBadRequest, "Ukuran file maksimal 5MB")
 		return
@@ -1610,14 +1559,12 @@ func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
 		return
 	}
 
-	// Verify resolved paths stay within the upload directory
 	absUploadDir, err := filepath.Abs(uploadDir)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "Gagal memproses path")
 		return
 	}
 
-	// Clean up other extensions to prevent old file residue
 	extensions := []string{".png", ".jpg", ".jpeg", ".svg"}
 	for _, e := range extensions {
 		if e != ext {
@@ -1633,7 +1580,6 @@ func (h *AdminHandler) UploadConfigImage(c *gin.Context) {
 	filename := configKey + ext
 	dst := filepath.Join(uploadDir, filename)
 
-	// Verify the final destination path is within the upload directory
 	absDst, err := filepath.Abs(dst)
 	if err != nil || !strings.HasPrefix(absDst, absUploadDir) {
 		response.Error(c, http.StatusBadRequest, "Path file tidak valid")
@@ -1675,7 +1621,6 @@ func (h *AdminHandler) GetAuditLogs(c *gin.Context) {
 	}
 	offset := (page - 1) * limit
 
-	// Optional filters: activity_type, search (matches description or user_id).
 	activityType := strings.TrimSpace(c.Query("activity_type"))
 	search := strings.TrimSpace(c.Query("search"))
 
@@ -1698,14 +1643,12 @@ func (h *AdminHandler) GetAuditLogs(c *gin.Context) {
 		whereSQL = " WHERE " + strings.Join(whereClauses, " AND ")
 	}
 
-	// Total count.
 	countQuery := "SELECT COUNT(*) FROM activity_logs" + whereSQL
 	if err := h.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	// Page rows.
 	listArgs := append(append([]any{}, args...), limit, offset)
 	rows, err := h.db.Query(`
 		SELECT id, user_id, activity_type AS action, description AS details, ip_address, user_agent, created_at
