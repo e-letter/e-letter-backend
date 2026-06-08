@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"database/sql"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,18 +8,16 @@ import (
 	"github.com/Refliqx/backend-eletter/internal/domain"
 	"github.com/Refliqx/backend-eletter/internal/response"
 	"github.com/Refliqx/backend-eletter/internal/service"
-	"github.com/Refliqx/backend-eletter/internal/utils"
 	"github.com/gin-gonic/gin"
 )
 
 type PermissionHandler struct {
 	service service.PermissionService
 	isDev   bool
-	db      *sql.DB
 }
 
-func NewPermissionHandler(s service.PermissionService, isDev bool, db *sql.DB) *PermissionHandler {
-	return &PermissionHandler{service: s, isDev: isDev, db: db}
+func NewPermissionHandler(s service.PermissionService, isDev bool) *PermissionHandler {
+	return &PermissionHandler{service: s, isDev: isDev}
 }
 
 func (h *PermissionHandler) GetRequests(c *gin.Context) {
@@ -70,10 +66,6 @@ func (h *PermissionHandler) CreateRequest(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "Failed to create request: "+err.Error())
 		return
 	}
-	userID := toIntFromContext(c, "userId")
-	utils.LogActivity(h.db, int64(userID), "create_request",
-		fmt.Sprintf("Membuat permintaan baru id=%d tipe=%d", id, req.TypeID),
-		c.ClientIP(), c.GetHeader("User-Agent"))
 	response.Raw(c, http.StatusCreated, gin.H{"success": true, "data": gin.H{"request_id": id}})
 }
 
@@ -105,8 +97,6 @@ func (h *PermissionHandler) DeleteRequest(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "Failed to delete request: "+err.Error())
 		return
 	}
-	userID := toIntFromContext(c, "userId")
-	utils.LogActivity(h.db, int64(userID), "delete_request", fmt.Sprintf("Pengguna menghapus permintaan id=%d", id), c.ClientIP(), c.GetHeader("User-Agent"))
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Request deleted successfully"})
 }
 
@@ -125,9 +115,6 @@ func (h *PermissionHandler) Approve(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "Failed to process approval: "+err.Error())
 		return
 	}
-	utils.LogActivity(h.db, int64(userID), fmt.Sprintf("approval_%s", req.Status),
-		fmt.Sprintf("Approval request_id=%d stage_id=%d status=%s", req.RequestID, req.StageID, req.Status),
-		c.ClientIP(), c.GetHeader("User-Agent"))
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Request processed successfully"})
 }
 
@@ -198,7 +185,6 @@ func (h *PermissionHandler) CancelRequest(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	utils.LogActivity(h.db, int64(userID), "cancel_request", fmt.Sprintf("Pengguna membatalkan permintaan id=%d", id), c.ClientIP(), c.GetHeader("User-Agent"))
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Permintaan berhasil dibatalkan"})
 }
 

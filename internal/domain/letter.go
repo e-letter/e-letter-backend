@@ -52,6 +52,16 @@ type TeacherRole struct {
 	RoleName string
 }
 
+type RequestTypeInfo struct {
+	ID            int
+	Code          string
+	Label         string
+	LetterPrefix  string
+	RequesterRole string
+	DurationDays  int
+	IsActive      bool
+}
+
 type LetterRepository interface {
 	CreateLetter(userID int, req LetterCreateRequest) (int, error)
 	ListLettersForUser(userID int, typeKey string, page, limit int) (*PaginatedLetterResponse, error)
@@ -62,6 +72,9 @@ type LetterRepository interface {
 	ListPendingForTeacher(userID int, page, limit int) (*PaginatedLetterResponse, error)
 	GetTeacherActiveRoles(userID int) ([]TeacherRole, error)
 	IsActivePrincipal(userID int) (bool, error)
+	GetUserRole(userID int) (string, error)
+	GetRequestTypeInfo(typeID int) (*RequestTypeInfo, error)
+	HasActiveRequest(userID int, requestTypeID int, requestDate string) (bool, error)
 }
 
 type LetterService interface {

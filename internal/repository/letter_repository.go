@@ -1036,3 +1036,39 @@ func (r *letterRepository) ListTeacherLetters(userID int, page, limit int) (*dom
 		TotalItems:  totalItems,
 	}, nil
 }
+
+func (r *letterRepository) GetUserRole(userID int) (string, error) {
+	var role string
+	err := r.db.QueryRow(`SELECT role FROM users WHERE id = ? AND deleted_at IS NULL`, userID).Scan(&role)
+	if err != nil {
+		return "", err
+	}
+	return role, nil
+}
+
+func (r *letterRepository) GetRequestTypeInfo(typeID int) (*domain.RequestTypeInfo, error) {
+	info := &domain.RequestTypeInfo{}
+	err := r.db.QueryRow(
+		`SELECT id, code, label, letter_prefix, requester_role, duration_days, is_active FROM request_types WHERE id = ?`,
+		typeID,
+	).Scan(&info.ID, &info.Code, &info.Label, &info.LetterPrefix, &info.RequesterRole, &info.DurationDays, &info.IsActive)
+	if err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func (r *letterRepository) HasActiveRequest(userID int, requestTypeID int, requestDate string) (bool, error) {
+	var count int
+	err := r.db.QueryRow(
+		`SELECT COUNT(*) FROM requests
+		 WHERE requester_user_id = ? AND request_type_id = ? AND request_date = ?
+		 AND status IN ('pending', 'approved')
+		 AND deleted_at IS NULL`,
+		userID, requestTypeID, requestDate,
+	).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}

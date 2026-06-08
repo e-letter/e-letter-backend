@@ -2,8 +2,6 @@ package handler
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -13,7 +11,6 @@ import (
 	"github.com/Refliqx/backend-eletter/internal/domain"
 	"github.com/Refliqx/backend-eletter/internal/response"
 	"github.com/Refliqx/backend-eletter/internal/service"
-	"github.com/Refliqx/backend-eletter/internal/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -25,11 +22,10 @@ type AuthHandler struct {
 	service     service.AuthService
 	cfg         *config.Config
 	rateLimiter RateLimiter
-	db          *sql.DB
 }
 
-func NewAuthHandler(s service.AuthService, cfg *config.Config, rl RateLimiter, db *sql.DB) *AuthHandler {
-	return &AuthHandler{service: s, cfg: cfg, rateLimiter: rl, db: db}
+func NewAuthHandler(s service.AuthService, cfg *config.Config, rl RateLimiter) *AuthHandler {
+	return &AuthHandler{service: s, cfg: cfg, rateLimiter: rl}
 }
 
 func setRefreshCookie(c *gin.Context, value string, maxAge int) {
@@ -107,7 +103,6 @@ func (h *AuthHandler) AdminLogin(c *gin.Context) {
 	}
 
 	if req.Username != h.cfg.Admin.Username || req.Password != h.cfg.Admin.Password {
-		utils.LogActivity(h.db, 0, "login_failed", fmt.Sprintf("Login admin gagal untuk username: %s", req.Username), c.ClientIP(), c.GetHeader("User-Agent"))
 		response.Error(c, http.StatusUnauthorized, "Kredensial admin tidak valid")
 		return
 	}
@@ -123,7 +118,6 @@ func (h *AuthHandler) AdminLogin(c *gin.Context) {
 	}
 
 	setRefreshCookie(c, refreshToken, 30*24*60*60)
-	utils.LogActivity(h.db, int64(adminUserID), "login", "Admin login berhasil", c.ClientIP(), c.GetHeader("User-Agent"))
 	response.Raw(c, http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
@@ -144,7 +138,6 @@ func (h *AuthHandler) KepsekLogin(c *gin.Context) {
 	}
 
 	if req.Username != h.cfg.Kepsek.Username || req.Password != h.cfg.Kepsek.Password {
-		utils.LogActivity(h.db, 0, "login_failed", fmt.Sprintf("Login kepsek gagal untuk username: %s", req.Username), c.ClientIP(), c.GetHeader("User-Agent"))
 		response.Error(c, http.StatusUnauthorized, "Kredensial kepsek tidak valid")
 		return
 	}
@@ -160,7 +153,6 @@ func (h *AuthHandler) KepsekLogin(c *gin.Context) {
 	}
 
 	setRefreshCookie(c, refreshToken, 30*24*60*60)
-	utils.LogActivity(h.db, int64(kepsekUserID), "login", "Kepala Sekolah login berhasil", c.ClientIP(), c.GetHeader("User-Agent"))
 	response.Raw(c, http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
@@ -192,8 +184,6 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	refreshToken, _ := c.Cookie("refreshToken")
 	_ = h.service.Logout(refreshToken)
 	setRefreshCookie(c, "", -1)
-	userID := toIntFromContext(c, "userId")
-	utils.LogActivity(h.db, int64(userID), "logout", "User logout", c.ClientIP(), c.GetHeader("User-Agent"))
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Logout berhasil"})
 }
 
@@ -222,7 +212,6 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 	}
 
 	_ = h.service.ForgotPassword(req.Email, c.ClientIP())
-	utils.LogActivity(h.db, 0, "forgot_password", fmt.Sprintf("Permintaan reset password untuk email: %s", req.Email), c.ClientIP(), c.GetHeader("User-Agent"))
 	// Always return success to not reveal if email exists
 	response.Raw(c, http.StatusOK, gin.H{
 		"success": true,
@@ -263,6 +252,5 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 
-	utils.LogActivity(h.db, 0, "reset_password", fmt.Sprintf("Reset password berhasil untuk email: %s", req.Email), c.ClientIP(), c.GetHeader("User-Agent"))
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Kata sandi berhasil diubah"})
 }

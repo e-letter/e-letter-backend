@@ -216,50 +216,6 @@ func (r *permissionRepository) GetUserByID(userID int) (*domain.User, error) {
 }
 
 func (r *permissionRepository) Create(req domain.CreatePermissionRequest) (int, error) {
-	// Migration of trg_requests_bi_validate: validate user existence, requester_role match, and duration fields.
-	{
-		var userRole string
-		err := r.db.QueryRow(`SELECT role FROM users WHERE id = ?`, req.IDSiswa).Scan(&userRole)
-		if err != nil {
-			return 0, errors.New("User pengaju tidak ditemukan")
-		}
-
-		var requesterRole string
-		err = r.db.QueryRow(`SELECT requester_role FROM request_types WHERE id = ?`, req.TypeID).Scan(&requesterRole)
-		if err != nil {
-			return 0, errors.New("Jenis surat tidak ditemukan")
-		}
-
-		if requesterRole == "student" && userRole != "student" {
-			return 0, errors.New("Izin keluar/masuk hanya boleh diajukan oleh siswa")
-		}
-		if requesterRole == "teacher" && userRole != "teacher" && userRole != "kepala_sekolah" {
-			return 0, errors.New("Dispensasi hanya boleh diajukan oleh guru")
-		}
-	}
-
-	// Migration of trg_requests_rate_limit: for students, reject duplicate active requests on same type/date.
-	{
-		var userRole string
-		_ = r.db.QueryRow(`SELECT role FROM users WHERE id = ?`, req.IDSiswa).Scan(&userRole)
-		if userRole == "student" {
-			var dupCount int
-			_ = r.db.QueryRow(
-				`SELECT COUNT(*) FROM requests WHERE requester_user_id = ? AND request_type_id = ? AND request_date = ? AND status IN ('pending', 'approved')`,
-				req.IDSiswa, req.TypeID, req.RequestDate,
-			).Scan(&dupCount)
-			if dupCount > 0 {
-				return 0, errors.New("Sudah ada surat izin aktif untuk tanggal dan tipe yang sama")
-			}
-		}
-	}
-
-	// Migration of trg_requests_bi_validate: duration_days defaults to 1 in the schema,
-	// so start_time and end_time are always required for every request.
-	if req.StartDate == "" || req.EndDate == "" {
-		return 0, errors.New("Jam mulai dan jam selesai wajib diisi")
-	}
-
 	tx, err := r.db.Begin()
 	if err != nil {
 		return 0, err

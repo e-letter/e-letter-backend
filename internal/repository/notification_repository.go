@@ -257,54 +257,9 @@ func (r *notificationRepository) buildVirtualNotification(userID int64, v virtua
 	}
 }
 
-func (r *notificationRepository) enforceNotificationLimit(ctx context.Context, userID int64) {
-	// Migration of trg_notifications_limit trigger logic.
-	// Keep at most 100 total notifications per user, purging oldest read ones first.
-	var total int
-	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notifications WHERE user_id = ?`, userID).Scan(&total)
-	if err != nil || total < 100 {
-		return
-	}
-
-	var readCount int
-	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 1`, userID).Scan(&readCount)
-
-	if readCount > 0 {
-		r.db.ExecContext(ctx,
-			`DELETE FROM notifications
-			 WHERE user_id = ? AND is_read = 1
-			   AND id NOT IN (
-			     SELECT id FROM (
-			       SELECT id FROM notifications
-			       WHERE user_id = ? AND is_read = 1
-			       ORDER BY created_at DESC
-			       LIMIT 50
-			     ) AS keep_read
-			   )`,
-			userID, userID,
-		)
-	} else if total >= 150 {
-		r.db.ExecContext(ctx,
-			`DELETE FROM notifications
-			 WHERE user_id = ? AND is_read = 0
-			   AND id NOT IN (
-			     SELECT id FROM (
-			       SELECT id FROM notifications
-			       WHERE user_id = ?
-			       ORDER BY created_at DESC
-			       LIMIT 149
-			     ) AS keep_unread
-			   )`,
-			userID, userID,
-		)
-	}
-}
-
 func (r *notificationRepository) Create(ctx context.Context, userID int64, notifType, title string, body *string, requestID, approvalID *int64) error {
-	// Enforce notification limit before creating (migration of trg_notifications_limit).
-	r.enforceNotificationLimit(ctx, userID)
-
-	// Ensure the notification type exists in ref_values.
+	// Ensure the notification type exists in ref_values so the DB trigger
+	// trg_notifications_validate_type doesn't reject the INSERT.
 	_, _ = r.db.ExecContext(ctx,
 		`INSERT IGNORE INTO ref_values (group_key, value, label, description, color, icon, sort_order, is_active)
 		 VALUES ('notification_type', ?, ?, 'Auto-registered notification type', 'blue', 'bell', 99, 1)`,
@@ -320,44 +275,7 @@ func (r *notificationRepository) Create(ctx context.Context, userID int64, notif
 }
 
 func createNotificationTx(tx *sql.Tx, userID int64, notifType, title string, body *string, requestID, approvalID *int64) error {
-	// Enforce notification limit (migration of trg_notifications_limit).
-	var total int
-	_ = tx.QueryRow(`SELECT COUNT(*) FROM notifications WHERE user_id = ?`, userID).Scan(&total)
-	if total >= 100 {
-		var readCount int
-		_ = tx.QueryRow(`SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 1`, userID).Scan(&readCount)
-		if readCount > 0 {
-			tx.Exec(
-				`DELETE FROM notifications
-				 WHERE user_id = ? AND is_read = 1
-				   AND id NOT IN (
-				     SELECT id FROM (
-				       SELECT id FROM notifications
-				       WHERE user_id = ? AND is_read = 1
-				       ORDER BY created_at DESC
-				       LIMIT 50
-				     ) AS keep_read
-				   )`,
-				userID, userID,
-			)
-		} else if total >= 150 {
-			tx.Exec(
-				`DELETE FROM notifications
-				 WHERE user_id = ? AND is_read = 0
-				   AND id NOT IN (
-				     SELECT id FROM (
-				       SELECT id FROM notifications
-				       WHERE user_id = ?
-				       ORDER BY created_at DESC
-				       LIMIT 149
-				     ) AS keep_unread
-				   )`,
-				userID, userID,
-			)
-		}
-	}
-
-	// Ensure the notification type exists in ref_values.
+	// Same auto-registration for the transactional path.
 	_, _ = tx.Exec(
 		`INSERT IGNORE INTO ref_values (group_key, value, label, description, color, icon, sort_order, is_active)
 		 VALUES ('notification_type', ?, ?, 'Auto-registered notification type', 'blue', 'bell', 99, 1)`,

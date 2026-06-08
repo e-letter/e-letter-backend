@@ -35,15 +35,41 @@ func NewLetterService(repo repository.LetterRepository, baseURL string) LetterSe
 }
 
 func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int, error) {
-	if req.TypeID == 0 || strings.TrimSpace(req.StartTime) == "" {
-		return 0, errors.New("type_id dan start_time diperlukan")
+	if req.TypeID == 0 {
+		return 0, errors.New("type_id diperlukan")
 	}
 
-	// For izin-keluar (type_id=1), end_time is still required.
-	// For izin-masuk (type_id=2) and dispensasi (type_id=3), end_time is optional.
-	// If empty, default to start_time so the DB column has a valid value.
-	if req.TypeID == 1 && strings.TrimSpace(req.EndTime) == "" {
-		return 0, errors.New("type_id, start_time, dan end_time diperlukan")
+	// Phase 1c: Validate user existence and role
+	userRole, err := s.repo.GetUserRole(userID)
+	if err != nil {
+		return 0, errors.New("User pengaju tidak ditemukan")
+	}
+
+	// Phase 1c: Validate request type existence
+	typeInfo, err := s.repo.GetRequestTypeInfo(req.TypeID)
+	if err != nil {
+		return 0, errors.New("Jenis surat tidak ditemukan")
+	}
+	if !typeInfo.IsActive {
+		return 0, errors.New("Jenis surat tidak aktif")
+	}
+
+	// Phase 1c: Validate role matches request type
+	if typeInfo.RequesterRole == "student" && userRole != "student" {
+		return 0, errors.New("Izin keluar/masuk hanya boleh diajukan oleh siswa")
+	}
+	if typeInfo.RequesterRole == "teacher" && userRole != "teacher" && userRole != "kepala_sekolah" {
+		return 0, errors.New("Dispensasi hanya boleh diajukan oleh guru")
+	}
+
+	// Phase 1c: If duration_days = 1, both start_time and end_time are required
+	if typeInfo.DurationDays == 1 {
+		if strings.TrimSpace(req.StartTime) == "" || strings.TrimSpace(req.EndTime) == "" {
+			return 0, errors.New("Untuk izin 1 hari, jam mulai dan jam selesai wajib diisi")
+		}
+	}
+	if strings.TrimSpace(req.StartTime) == "" {
+		return 0, errors.New("start_time diperlukan")
 	}
 	if strings.TrimSpace(req.EndTime) == "" {
 		req.EndTime = req.StartTime
@@ -58,6 +84,17 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 		effectiveDate = time.Now().Format("2006-01-02")
 	}
 
+	// Phase 1d: Rate limit — students cannot have duplicate pending/approved requests for same type+date
+	if userRole == "student" {
+		hasActive, err := s.repo.HasActiveRequest(userID, req.TypeID, effectiveDate)
+		if err != nil {
+			return 0, err
+		}
+		if hasActive {
+			return 0, errors.New("Sudah ada surat izin aktif untuk tanggal dan tipe yang sama")
+		}
+	}
+
 	// Validate date is not weekend
 	if err := validateNotWeekend(effectiveDate); err != nil {
 		return 0, err
@@ -69,7 +106,7 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 	if startTime == "" || endTime == "" {
 		return 0, errors.New("format waktu tidak valid (gunakan HH:MM:SS)")
 	}
-	if err := validateSchoolHours(req.TypeID, startTime, endTime); err != nil {
+	if err := validateSchoolHours(typeInfo.DurationDays, startTime, endTime); err != nil {
 		return 0, err
 	}
 
@@ -80,7 +117,6 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 			return 0, fmt.Errorf("failed to decode signature: %w", err)
 		}
 
-		// Generate a unique filename for the letter signature (student role assumed for letter creation)
 		filename := fmt.Sprintf("student_%d_%d.png", userID, time.Now().UnixNano())
 		filePath := filepath.Join("public", "uploads", "signatures", filename)
 
@@ -92,7 +128,6 @@ func (s *letterService) Create(userID int, req domain.LetterCreateRequest) (int,
 			return 0, fmt.Errorf("failed to save signature file: %w", err)
 		}
 
-		// Store signature URL using the configured base URL.
 		signatureURL := strings.TrimRight(s.baseURL, "/") + "/signatures/" + filename
 		req.SignatureURL = &signatureURL
 	}
@@ -213,9 +248,9 @@ func validateNotWeekend(date string) error {
 }
 
 // validateSchoolHours checks that start and end times are within school operating hours.
-// For izin-masuk (typeID=2) and dispensasi (typeID=3), only the start time is validated
+// For multi-day requests (durationDays > 1), only the start time is validated
 // because end_time is optional and gets defaulted to start_time.
-func validateSchoolHours(typeID int, startTime, endTime string) error {
+func validateSchoolHours(durationDays int, startTime, endTime string) error {
 	parseTimeOnly := func(s string) (int, int, error) {
 		parts := strings.Split(s, ":")
 		if len(parts) < 2 {
@@ -244,8 +279,8 @@ func validateSchoolHours(typeID int, startTime, endTime string) error {
 		return fmt.Errorf("jam mulai (%02d:%02d) di luar jam operasional sekolah (07:00 - 15:00 WIB)", startH, startM)
 	}
 
-	// Only validate end_time and end > start for izin-keluar (typeID=1).
-	if typeID != 1 {
+	// Only validate end_time and end > start for single-day requests (durationDays == 1).
+	if durationDays != 1 {
 		return nil
 	}
 
