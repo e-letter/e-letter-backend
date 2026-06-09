@@ -25,37 +25,127 @@ func NewPermissionRepository(db *sql.DB, schoolCode string, publisher Notificati
 	return &permissionRepository{db: db, schoolCode: schoolCode, publisher: publisher}
 }
 
-func (r *permissionRepository) ListAll(startDate, endDate string) ([]domain.PermissionRequest, error) {
-	query := `
-		SELECT r.id, r.request_type_id, r.request_number, r.requester_user_id, r.reason, r.request_date, r.start_time, r.end_time, r.status, r.current_step, r.created_at, r.updated_at,
-		       sp.full_name AS student_name, c.class_name AS class_name
-		FROM requests r
-		LEFT JOIN student_profiles sp ON sp.user_id = r.requester_user_id
-		LEFT JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
-		LEFT JOIN classes c ON c.id = sce.class_id
-		WHERE r.deleted_at IS NULL
-	`
-	var args []any
+func (r *permissionRepository) ListAll(startDate, endDate, search, status, typeKey string, page, limit int) (*domain.PaginatedPermissions, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 10
+	}
+
+	baseWhere := "r.deleted_at IS NULL"
+	args := []any{}
 	if startDate != "" {
-		query += " AND r.request_date >= ?"
+		baseWhere += " AND r.request_date >= ?"
 		args = append(args, startDate)
 	}
 	if endDate != "" {
-		query += " AND r.request_date <= ?"
+		baseWhere += " AND r.request_date <= ?"
 		args = append(args, endDate)
 	}
-	query += " ORDER BY r.request_date DESC, r.created_at DESC"
+	if search != "" {
+		baseWhere += " AND (sp.full_name LIKE ? OR r.request_number LIKE ?)"
+		s := "%" + search + "%"
+		args = append(args, s, s)
+	}
+	if status != "" {
+		baseWhere += " AND r.status = ?"
+		args = append(args, status)
+	}
+	if typeKey != "" {
+		baseWhere += " AND rt.code = ?"
+		args = append(args, typeKey)
+	}
 
-	rows, err := r.db.Query(query, args...)
+	countSQL := `SELECT COUNT(*) FROM requests r
+		LEFT JOIN request_types rt ON rt.id = r.request_type_id
+		LEFT JOIN student_profiles sp ON sp.user_id = r.requester_user_id
+		WHERE ` + baseWhere
+	var total int
+	if err := r.db.QueryRow(countSQL, args...).Scan(&total); err != nil {
+		return nil, err
+	}
+
+	offset := (page - 1) * limit
+	listSQL := `
+		SELECT r.id, r.request_type_id, r.request_number, r.requester_user_id, r.reason, r.request_date, r.start_time, r.end_time, r.status, r.current_step, r.created_at, r.updated_at,
+		       sp.full_name AS student_name, c.class_name AS class_name,
+		       COALESCE(rt.code, '') AS type_key
+		FROM requests r
+		LEFT JOIN request_types rt ON rt.id = r.request_type_id
+		LEFT JOIN student_profiles sp ON sp.user_id = r.requester_user_id
+		LEFT JOIN student_class_enrollments sce ON sce.student_id = sp.id AND sce.is_active = 1
+		LEFT JOIN classes c ON c.id = sce.class_id
+		WHERE ` + baseWhere + ` ORDER BY r.request_date DESC, r.created_at DESC LIMIT ? OFFSET ?`
+	listArgs := append(append([]any{}, args...), limit, offset)
+
+	rows, err := r.db.Query(listSQL, listArgs...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanPermissionRequests(rows)
+	items, err := scanPermissionRequests(rows)
+	if err != nil {
+		return nil, err
+	}
+	totalPages := (total + limit - 1) / limit
+	return &domain.PaginatedPermissions{
+		Data:        items,
+		CurrentPage: page,
+		TotalPages:  totalPages,
+		TotalItems:  total,
+	}, nil
 }
 
-func (r *permissionRepository) ListByUser(userID int, startDate, endDate string) ([]domain.PermissionRequest, error) {
-	query := `
+func (r *permissionRepository) ListByUser(userID int, startDate, endDate, search, status, typeKey string, page, limit int) (*domain.PaginatedPermissions, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 10
+	}
+
+	baseWhere := "r.deleted_at IS NULL AND (r.requester_user_id = ? OR rs.request_id IS NOT NULL)"
+	args := []any{userID, userID}
+	if startDate != "" {
+		baseWhere += " AND r.request_date >= ?"
+		args = append(args, startDate)
+	}
+	if endDate != "" {
+		baseWhere += " AND r.request_date <= ?"
+		args = append(args, endDate)
+	}
+	if search != "" {
+		baseWhere += " AND (sp_req.full_name LIKE ? OR sp_target.full_name LIKE ? OR r.request_number LIKE ?)"
+		s := "%" + search + "%"
+		args = append(args, s, s, s)
+	}
+	if status != "" {
+		baseWhere += " AND r.status = ?"
+		args = append(args, status)
+	}
+	if typeKey != "" {
+		baseWhere += " AND rt.code = ?"
+		args = append(args, typeKey)
+	}
+
+	countSQL := `SELECT COUNT(DISTINCT r.id) FROM requests r
+		LEFT JOIN request_types rt ON rt.id = r.request_type_id
+		LEFT JOIN student_profiles sp_req ON sp_req.user_id = r.requester_user_id
+		LEFT JOIN request_students rs ON rs.request_id = r.id AND rs.student_id = (
+		    SELECT id FROM student_profiles WHERE user_id = ? LIMIT 1
+		)
+		LEFT JOIN student_profiles sp_target ON sp_target.id = rs.student_id
+		WHERE ` + baseWhere
+	countArgs := []any{userID}
+	countArgs = append(countArgs, args[2:]...)
+	var total int
+	if err := r.db.QueryRow(countSQL, countArgs...).Scan(&total); err != nil {
+		return nil, err
+	}
+
+	offset := (page - 1) * limit
+	listSQL := `
 		SELECT r.id,
 		       MAX(r.request_type_id) AS request_type_id,
 		       MAX(r.request_number) AS request_number,
@@ -69,8 +159,10 @@ func (r *permissionRepository) ListByUser(userID int, startDate, endDate string)
 		       MAX(r.created_at) AS created_at,
 		       MAX(r.updated_at) AS updated_at,
 		       MAX(COALESCE(sp_req.full_name, sp_target.full_name)) AS student_name,
-		       MAX(COALESCE(c_req.class_name, c_target.class_name)) AS class_name
+		       MAX(COALESCE(c_req.class_name, c_target.class_name)) AS class_name,
+		       MAX(COALESCE(rt.code, '')) AS type_key
 		FROM requests r
+		LEFT JOIN request_types rt ON rt.id = r.request_type_id
 		LEFT JOIN student_profiles sp_req ON sp_req.user_id = r.requester_user_id
 		LEFT JOIN student_class_enrollments sce_req ON sce_req.student_id = sp_req.id AND sce_req.is_active = 1
 		LEFT JOIN classes c_req ON c_req.id = sce_req.class_id
@@ -80,28 +172,27 @@ func (r *permissionRepository) ListByUser(userID int, startDate, endDate string)
 		LEFT JOIN student_profiles sp_target ON sp_target.id = rs.student_id
 		LEFT JOIN student_class_enrollments sce_target ON sce_target.student_id = sp_target.id AND sce_target.is_active = 1
 		LEFT JOIN classes c_target ON c_target.id = sce_target.class_id
-		WHERE r.deleted_at IS NULL
-		  AND (r.requester_user_id = ? OR rs.request_id IS NOT NULL)
-		GROUP BY r.id
-	`
-	args := []any{userID, userID}
-	if startDate != "" {
-		query += " AND r.request_date >= ?"
-		args = append(args, startDate)
-	}
-	if endDate != "" {
-		query += " AND r.request_date <= ?"
-		args = append(args, endDate)
-	}
-	query += " ORDER BY MAX(r.request_date) DESC, MAX(r.created_at) DESC"
+		WHERE ` + baseWhere + ` GROUP BY r.id ORDER BY MAX(r.request_date) DESC, MAX(r.created_at) DESC LIMIT ? OFFSET ?`
+	listArgs := append([]any{}, userID)
+	listArgs = append(listArgs, args[2:]...)
+	listArgs = append(listArgs, limit, offset)
 
-	rows, err := r.db.Query(query, args...)
+	rows, err := r.db.Query(listSQL, listArgs...)
 	if err != nil {
-		println("[DEBUG] ListByUser query error:", err.Error())
 		return nil, err
 	}
 	defer rows.Close()
-	return scanPermissionRequests(rows)
+	items, err := scanPermissionRequests(rows)
+	if err != nil {
+		return nil, err
+	}
+	totalPages := (total + limit - 1) / limit
+	return &domain.PaginatedPermissions{
+		Data:        items,
+		CurrentPage: page,
+		TotalPages:  totalPages,
+		TotalItems:  total,
+	}, nil
 }
 
 func (r *permissionRepository) ListClasses() ([]domain.PermissionClass, error) {
@@ -705,6 +796,7 @@ func scanPermissionRequests(rows *sql.Rows) ([]domain.PermissionRequest, error) 
 			&req.UpdatedAt,
 			&req.StudentName,
 			&req.ClassName,
+			&req.TypeKey,
 		); err != nil {
 			return nil, err
 		}

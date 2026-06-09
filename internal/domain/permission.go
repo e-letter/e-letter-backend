@@ -17,6 +17,7 @@ type PermissionRequest struct {
 	UpdatedAt       time.Time `json:"updated_at" db:"updated_at"`
 	StudentName     *string   `json:"student_name,omitempty"`
 	ClassName       *string   `json:"class_name,omitempty"`
+	TypeKey         string    `json:"type_key"`
 }
 
 type PermissionClass struct {
@@ -81,9 +82,16 @@ type PendingTeacherRole struct {
 	CreatedAt       string  `json:"created_at"`
 }
 
+type PaginatedPermissions struct {
+	Data        []PermissionRequest `json:"data"`
+	CurrentPage int                 `json:"currentPage"`
+	TotalPages  int                 `json:"totalPages"`
+	TotalItems  int                 `json:"totalItems"`
+}
+
 type PermissionRepository interface {
-	ListAll(startDate, endDate string) ([]PermissionRequest, error)
-	ListByUser(userID int, startDate, endDate string) ([]PermissionRequest, error)
+	ListAll(startDate, endDate, search, status, typeKey string, page, limit int) (*PaginatedPermissions, error)
+	ListByUser(userID int, startDate, endDate, search, status, typeKey string, page, limit int) (*PaginatedPermissions, error)
 	ListClasses() ([]PermissionClass, error)
 	ListMajors() ([]PermissionMajor, error)
 	GetUserByNISN(nisn string) (*User, error)
@@ -107,7 +115,7 @@ type PermissionRepository interface {
 }
 
 type PermissionService interface {
-	Get(action, idSiswa, nisn string, userID int, roleID int, startDate, endDate string) (any, error)
+	Get(action, idSiswa, nisn string, userID int, roleID int, startDate, endDate, search, status, typeKey string, page, limit int) (any, error)
 	Create(req CreatePermissionRequest) (int, error)
 	Update(req UpdatePermissionRequest) error
 	Delete(id int) error

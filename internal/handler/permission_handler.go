@@ -29,6 +29,18 @@ func (h *PermissionHandler) GetRequests(c *gin.Context) {
 	nisn := c.Query("nisn")
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
+	search := c.Query("search")
+	status := c.Query("status")
+	typeKey := c.Query("type_key")
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 10
+	}
 
 	userID := toIntFromContext(c, "userId")
 	userRole := c.GetString("userRole")
@@ -39,7 +51,7 @@ func (h *PermissionHandler) GetRequests(c *gin.Context) {
 		roleID = 1
 	}
 
-	out, err := h.service.Get(action, idSiswa, nisn, userID, roleID, startDate, endDate)
+	out, err := h.service.Get(action, idSiswa, nisn, userID, roleID, startDate, endDate, search, status, typeKey, page, limit)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if err.Error() == "Token akses diperlukan" {

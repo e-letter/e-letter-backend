@@ -45,32 +45,50 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 	role := c.Query("role")
 	status := c.Query("status")
 	search := c.Query("search")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "10"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 10
+	}
+	offset := (page - 1) * pageSize
 
-	query := `SELECT u.id, u.email, u.role, u.status, COALESCE(tp.full_name, sp.full_name, ap.full_name, pp.full_name, '') as full_name
-		FROM users u
+	baseQuery := `FROM users u
 		LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
 		LEFT JOIN student_profiles sp ON sp.user_id = u.id
 		LEFT JOIN admin_profiles ap ON ap.user_id = u.id
 		LEFT JOIN principal_profiles pp ON pp.user_id = u.id
-		WHERE u.deleted_at IS NULL`
+		LEFT JOIN tu_profiles tup ON tup.user_id = u.id
+		WHERE u.deleted_at IS NULL AND u.role != 'admin'`
 	args := []any{}
 
 	if role != "" {
-		query += " AND u.role = ?"
+		baseQuery += " AND u.role = ?"
 		args = append(args, role)
 	}
 	if status != "" {
-		query += " AND u.status = ?"
+		baseQuery += " AND u.status = ?"
 		args = append(args, status)
 	}
 	if search != "" {
-		query += " AND (u.email LIKE ? OR tp.full_name LIKE ? OR sp.full_name LIKE ? OR ap.full_name LIKE ? OR pp.full_name LIKE ?)"
+		baseQuery += " AND (u.email LIKE ? OR tp.full_name LIKE ? OR sp.full_name LIKE ? OR ap.full_name LIKE ? OR pp.full_name LIKE ? OR tup.full_name LIKE ?)"
 		s := "%" + search + "%"
-		args = append(args, s, s, s, s, s)
+		args = append(args, s, s, s, s, s, s)
 	}
-	query += " ORDER BY u.id DESC LIMIT 100"
 
-	rows, err := h.db.Query(query, args...)
+	var total int
+	countQuery := "SELECT COUNT(*) " + baseQuery
+	if err := h.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	selectQuery := "SELECT u.id, u.email, u.role, u.status, COALESCE(tp.full_name, sp.full_name, ap.full_name, pp.full_name, tup.full_name, '') as full_name " + baseQuery + " ORDER BY u.id DESC LIMIT ? OFFSET ?"
+	argsLimit := append(args, pageSize, offset)
+
+	rows, err := h.db.Query(selectQuery, argsLimit...)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
@@ -90,7 +108,12 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 		rows.Scan(&u.ID, &u.Email, &u.Role, &u.Status, &u.FullName)
 		users = append(users, u)
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": users})
+
+	response.Raw(c, http.StatusOK, gin.H{
+		"success": true,
+		"data":    users,
+		"total":   total,
+	})
 }
 
 func (h *AdminHandler) UpdateUserStatus(c *gin.Context) {
@@ -855,7 +878,20 @@ func (h *AdminHandler) VerifyTeacherRole(c *gin.Context) {
 
 func (h *AdminHandler) ListPendingTeacherRoles(c *gin.Context) {
 	status := c.DefaultQuery("status", "pending")
-	rows, err := h.db.Query(`
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	if limit < 1 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+
+	unionSQL := `
 		SELECT
 			tr.id,
 			tp.id AS teacher_id,
@@ -892,8 +928,17 @@ func (h *AdminHandler) ListPendingTeacherRoles(c *gin.Context) {
 		FROM users u
 		JOIN teacher_profiles tp ON tp.user_id = u.id
 		WHERE u.role = 'teacher' AND u.status = ? AND u.deleted_at IS NULL
-		ORDER BY created_at DESC
-	`, status, status)
+	`
+
+	var total int
+	countSQL := "SELECT COUNT(*) FROM (" + unionSQL + ") AS combined"
+	if err := h.db.QueryRow(countSQL, status, status).Scan(&total); err != nil {
+		response.Error(c, http.StatusInternalServerError, "Gagal menghitung data: "+err.Error())
+		return
+	}
+
+	listSQL := "SELECT * FROM (" + unionSQL + ") AS combined ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	rows, err := h.db.Query(listSQL, status, status, limit, offset)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
@@ -954,7 +999,17 @@ func (h *AdminHandler) ListPendingTeacherRoles(c *gin.Context) {
 	if items == nil {
 		items = []PendingRole{}
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": items})
+	totalPages := (total + limit - 1) / limit
+	response.Raw(c, http.StatusOK, gin.H{
+		"success": true,
+		"data":    items,
+		"meta": gin.H{
+			"page":        page,
+			"limit":       limit,
+			"total":       total,
+			"total_pages": totalPages,
+		},
+	})
 }
 
 func (h *AdminHandler) RejectTeacherRole(c *gin.Context) {
@@ -1123,22 +1178,23 @@ func (h *AdminHandler) DeleteAcademicYear(c *gin.Context) {
 }
 
 func (h *AdminHandler) GetClasses(c *gin.Context) {
-	rows, err := h.db.Query(`SELECT c.id, c.class_name, c.major_id, COALESCE(m.name,'') FROM classes c LEFT JOIN majors m ON m.id = c.major_id ORDER BY c.class_name`)
+	rows, err := h.db.Query(`SELECT c.id, c.class_name, c.major_id, c.grade_level, COALESCE(m.name,'') FROM classes c LEFT JOIN majors m ON m.id = c.major_id ORDER BY c.class_name`)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer rows.Close()
 	type Class struct {
-		ID        int    `json:"id"`
-		ClassName string `json:"class_name"`
-		MajorID   int    `json:"major_id"`
-		MajorName string `json:"major_name"`
+		ID         int    `json:"id"`
+		ClassName  string `json:"class_name"`
+		MajorID    int    `json:"major_id"`
+		GradeLevel int    `json:"grade_level"`
+		MajorName  string `json:"major_name"`
 	}
 	var items []Class
 	for rows.Next() {
 		var item Class
-		rows.Scan(&item.ID, &item.ClassName, &item.MajorID, &item.MajorName)
+		rows.Scan(&item.ID, &item.ClassName, &item.MajorID, &item.GradeLevel, &item.MajorName)
 		items = append(items, item)
 	}
 	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": items})
@@ -1346,18 +1402,47 @@ func (h *AdminHandler) DeleteSubject(c *gin.Context) {
 
 func (h *AdminHandler) GetEnrollments(c *gin.Context) {
 	classID := c.Query("class_id")
-	query := `SELECT sce.id, sce.student_id, sce.class_id, sce.academic_year_id, COALESCE(sp.full_name,'') as student_name, COALESCE(sp.student_code,'') as student_code, sce.promotion_note
-		FROM student_class_enrollments sce
-		JOIN student_profiles sp ON sp.id = sce.student_id
-		WHERE sce.is_active = 1`
+	search := strings.TrimSpace(c.Query("search"))
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	if limit < 1 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+
+	baseWhere := "sce.is_active = 1"
 	args := []any{}
 	if classID != "" {
-		query += " AND sce.class_id = ?"
+		baseWhere += " AND sce.class_id = ?"
 		args = append(args, classID)
 	}
-	query += " ORDER BY sp.full_name LIMIT 200"
+	if search != "" {
+		baseWhere += " AND (sp.full_name LIKE ? OR sp.student_code LIKE ?)"
+		s := "%" + search + "%"
+		args = append(args, s, s)
+	}
 
-	rows, err := h.db.Query(query, args...)
+	countSQL := `SELECT COUNT(*) FROM student_class_enrollments sce JOIN student_profiles sp ON sp.id = sce.student_id WHERE ` + baseWhere
+	var total int
+	if err := h.db.QueryRow(countSQL, args...).Scan(&total); err != nil {
+		response.Error(c, http.StatusInternalServerError, "Gagal menghitung data: "+err.Error())
+		return
+	}
+
+	listSQL := `SELECT sce.id, sce.student_id, sce.class_id, sce.academic_year_id, COALESCE(sp.full_name,'') as student_name, COALESCE(sp.student_code,'') as student_code, sce.promotion_note
+		FROM student_class_enrollments sce
+		JOIN student_profiles sp ON sp.id = sce.student_id
+		WHERE ` + baseWhere + ` ORDER BY sp.full_name LIMIT ? OFFSET ?`
+	listArgs := append(append([]any{}, args...), limit, offset)
+
+	rows, err := h.db.Query(listSQL, listArgs...)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
@@ -1378,7 +1463,17 @@ func (h *AdminHandler) GetEnrollments(c *gin.Context) {
 		rows.Scan(&item.ID, &item.StudentID, &item.ClassID, &item.AcademicYearID, &item.StudentName, &item.StudentCode, &item.Notes)
 		items = append(items, item)
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": items})
+	totalPages := (total + limit - 1) / limit
+	response.Raw(c, http.StatusOK, gin.H{
+		"success": true,
+		"data":    items,
+		"meta": gin.H{
+			"page":        page,
+			"limit":       limit,
+			"total":       total,
+			"total_pages": totalPages,
+		},
+	})
 }
 
 func (h *AdminHandler) CreateEnrollment(c *gin.Context) {
@@ -1389,11 +1484,15 @@ func (h *AdminHandler) CreateEnrollment(c *gin.Context) {
 		Notes          *string `json:"notes"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		response.Error(c, http.StatusBadRequest, err.Error())
+		response.Error(c, http.StatusBadRequest, "Data tidak valid. Periksa kembali input Anda.")
 		return
 	}
 	if body.AcademicYearID == 0 {
-		h.db.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&body.AcademicYearID)
+		err := h.db.QueryRow(`SELECT id FROM academic_years WHERE is_active = 1 LIMIT 1`).Scan(&body.AcademicYearID)
+		if err != nil {
+			response.Error(c, http.StatusBadRequest, "Tidak ada tahun ajaran aktif. Silakan aktifkan tahun ajaran terlebih dahulu.")
+			return
+		}
 	}
 
 	var notes *string
@@ -1404,12 +1503,38 @@ func (h *AdminHandler) CreateEnrollment(c *gin.Context) {
 		}
 	}
 
-	_, err := h.db.Exec(
+	var existingID int
+	err := h.db.QueryRow(
+		`SELECT id FROM student_class_enrollments WHERE student_id = ? AND academic_year_id = ? LIMIT 1`,
+		body.StudentID, body.AcademicYearID,
+	).Scan(&existingID)
+	if err == nil {
+		response.Error(c, http.StatusConflict, "Siswa sudah terdaftar di tahun ajaran ini.")
+		return
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		response.Error(c, http.StatusInternalServerError, "Gagal memeriksa data enrollment. Silakan coba lagi.")
+		return
+	}
+
+	_, err = h.db.Exec(
 		`INSERT INTO student_class_enrollments (student_id, class_id, academic_year_id, is_active, promotion_note) VALUES (?, ?, ?, 1, ?)`,
 		body.StudentID, body.ClassID, body.AcademicYearID, notes,
 	)
 	if err != nil {
-		response.Error(c, http.StatusInternalServerError, err.Error())
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) {
+			switch mysqlErr.Number {
+			case 1062:
+				response.Error(c, http.StatusConflict, "Siswa sudah terdaftar di tahun ajaran ini.")
+			case 1452:
+				response.Error(c, http.StatusBadRequest, "Data siswa, kelas, atau tahun ajaran tidak valid.")
+			default:
+				response.Error(c, http.StatusInternalServerError, "Gagal mendaftarkan siswa. Silakan coba lagi.")
+			}
+		} else {
+			response.Error(c, http.StatusInternalServerError, "Gagal mendaftarkan siswa. Silakan coba lagi.")
+		}
 		return
 	}
 

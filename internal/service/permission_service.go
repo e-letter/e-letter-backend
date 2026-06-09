@@ -21,7 +21,7 @@ func NewPermissionService(repo repository.PermissionRepository) PermissionServic
 	return &permissionService{repo: repo}
 }
 
-func (s *permissionService) Get(action, idSiswa, nisn string, userID int, roleID int, startDate, endDate string) (any, error) {
+func (s *permissionService) Get(action, idSiswa, nisn string, userID int, roleID int, startDate, endDate, search, status, typeKey string, page, limit int) (any, error) {
 	if action == "kelas" {
 		return s.repo.ListClasses()
 	}
@@ -34,14 +34,14 @@ func (s *permissionService) Get(action, idSiswa, nisn string, userID int, roleID
 		if err != nil {
 			return nil, err
 		}
-		return s.repo.ListByUser(uid, startDate, endDate)
+		return s.repo.ListByUser(uid, startDate, endDate, search, status, typeKey, page, limit)
 	}
 	if nisn != "" {
 		u, err := s.repo.GetUserByNISN(nisn)
 		if err != nil {
 			return nil, errors.New("User not found")
 		}
-		return s.repo.ListByUser(u.ID, startDate, endDate)
+		return s.repo.ListByUser(u.ID, startDate, endDate, search, status, typeKey, page, limit)
 	}
 
 	if userID <= 0 {
@@ -53,9 +53,9 @@ func (s *permissionService) Get(action, idSiswa, nisn string, userID int, roleID
 		return nil, errors.New("User tidak ditemukan")
 	}
 	if roleID == 2 || user.Role == "admin" {
-		return s.repo.ListAll(startDate, endDate)
+		return s.repo.ListAll(startDate, endDate, search, status, typeKey, page, limit)
 	}
-	return s.repo.ListByUser(userID, startDate, endDate)
+	return s.repo.ListByUser(userID, startDate, endDate, search, status, typeKey, page, limit)
 }
 
 func (s *permissionService) Create(req domain.CreatePermissionRequest) (int, error) {
