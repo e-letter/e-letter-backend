@@ -68,7 +68,7 @@ func (s *adminService) GetStats() (map[string]int, error) {
 	return stats, nil
 }
 
-func (s *adminService) GetUsers(role, status, search string, page, pageSize int) ([]domain.AdminUserListItem, int, error) {
+func (s *adminService) GetUsers(role, status, search string, page, pageSize int) ([]domain.AdminUserListItem, int, int, int, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -100,10 +100,17 @@ func (s *adminService) GetUsers(role, status, search string, page, pageSize int)
 		args = append(args, s, s, s, s, s, s)
 	}
 
-	var total int
+	var total, activeTotal, pendingTotal int
 	countQuery := "SELECT COUNT(*) " + baseQuery
 	if err := s.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, 0, err
+	}
+
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users WHERE deleted_at IS NULL AND role != 'admin' AND status = 'active'").Scan(&activeTotal); err != nil {
+		return nil, 0, 0, 0, err
+	}
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users WHERE deleted_at IS NULL AND role != 'admin' AND status = 'pending'").Scan(&pendingTotal); err != nil {
+		return nil, 0, 0, 0, err
 	}
 
 	selectQuery := "SELECT u.id, u.email, u.role, u.status, COALESCE(tp.full_name, sp.full_name, ap.full_name, pp.full_name, tup.full_name, '') as full_name " + baseQuery + " ORDER BY u.id DESC LIMIT ? OFFSET ?"
@@ -111,7 +118,7 @@ func (s *adminService) GetUsers(role, status, search string, page, pageSize int)
 
 	rows, err := s.db.Query(selectQuery, argsLimit...)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, 0, err
 	}
 	defer rows.Close()
 
@@ -119,11 +126,11 @@ func (s *adminService) GetUsers(role, status, search string, page, pageSize int)
 	for rows.Next() {
 		var u domain.AdminUserListItem
 		if err := rows.Scan(&u.ID, &u.Email, &u.Role, &u.Status, &u.FullName); err != nil {
-			return nil, 0, err
+			return nil, 0, 0, 0, err
 		}
 		users = append(users, u)
 	}
-	return users, total, nil
+	return users, total, activeTotal, pendingTotal, nil
 }
 
 func (s *adminService) UpdateUserStatus(userID int64, status string, adminUserID int64, ip, userAgent string) error {

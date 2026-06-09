@@ -36,12 +36,12 @@ func (h *AdminHandler) GetUsers(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "10"))
 
-	users, total, err := h.svc.GetUsers(role, status, search, page, pageSize)
+	users, total, activeTotal, pendingTotal, err := h.svc.GetUsers(role, status, search, page, pageSize)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	response.Success(c, http.StatusOK, "", gin.H{"data": users, "total": total})
+	response.Success(c, http.StatusOK, "", gin.H{"data": users, "total": total, "activeTotal": activeTotal, "pendingTotal": pendingTotal})
 }
 
 func (h *AdminHandler) UpdateUserStatus(c *gin.Context) {

@@ -36,7 +36,7 @@ type AdminPendingRole struct {
 type AcademicYear struct {
 	ID        int    `json:"id"`
 	Name      string `json:"name"`
-	IsActive  bool   `json:"is_active"`
+	IsActive  *bool  `json:"is_active"`
 	StartDate string `json:"start_date"`
 	EndDate   string `json:"end_date"`
 }
@@ -83,7 +83,7 @@ type AuditLogItem struct {
 
 type AdminService interface {
 	GetStats() (map[string]int, error)
-	GetUsers(role, status, search string, page, pageSize int) ([]AdminUserListItem, int, error)
+	GetUsers(role, status, search string, page, pageSize int) ([]AdminUserListItem, int, int, int, error)
 	UpdateUserStatus(userID int64, status string, adminUserID int64, ip, userAgent string) error
 	UpdateUser(id int64, role, fullName *string, adminUserID int64, ip, userAgent string) (map[string]any, error)
 	CreateUser(fullName, email, role, status, password string, adminUserID int64, ip, userAgent string) (map[string]any, error)
