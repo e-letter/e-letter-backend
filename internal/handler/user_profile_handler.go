@@ -43,10 +43,7 @@ func (h *UserProfileHandler) GetProfile(c *gin.Context) {
 		response.Error(c, http.StatusNotFound, "User tidak ditemukan")
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{
-		"success": true,
-		"data":    user,
-	})
+	response.Success(c, http.StatusOK, "", user)
 }
 
 func (h *UserProfileHandler) UpdateProfile(c *gin.Context) {
@@ -78,7 +75,7 @@ func (h *UserProfileHandler) UpdateProfile(c *gin.Context) {
 		return
 	}
 	utils.LogActivity(h.db, int64(userID), "update_profile", "Pembaruan profil user ID #"+strconv.Itoa(userID), c.ClientIP(), c.Request.UserAgent())
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": user})
+	response.Success(c, http.StatusOK, "", user)
 }
 
 func (h *UserProfileHandler) UploadSignature(c *gin.Context) {
@@ -254,8 +251,5 @@ func (h *UserProfileHandler) GetSchedules(c *gin.Context) {
 		return
 	}
 
-	response.Raw(c, http.StatusOK, gin.H{
-		"success": true,
-		"data":    schedules,
-	})
+	response.Success(c, http.StatusOK, "", schedules)
 }

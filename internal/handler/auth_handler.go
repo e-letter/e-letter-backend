@@ -57,10 +57,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 
 	utils.LogActivity(h.db, 0, "register", "Registrasi pengguna baru: "+req.Email, c.ClientIP(), c.Request.UserAgent())
 
-	response.Raw(c, http.StatusCreated, gin.H{
-		"success": true,
-		"data":    gin.H{"id": userID, "login_code": loginCode, "user_code": loginCode},
-	})
+	response.Success(c, http.StatusCreated, "", gin.H{"id": userID, "login_code": loginCode, "user_code": loginCode})
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -92,12 +89,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 	utils.LogActivity(h.db, int64(user.ID), "login", "Login berhasil: "+emailStr, c.ClientIP(), c.Request.UserAgent())
 
-	response.Raw(c, http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
-			"user":        gin.H{"id": user.ID, "email": user.Email, "full_name": user.FullName, "role": user.Role, "login_code": user.Username},
-			"accessToken": accessToken,
-		},
+	response.Success(c, http.StatusOK, "", gin.H{
+		"user":        gin.H{"id": user.ID, "email": user.Email, "full_name": user.FullName, "role": user.Role, "login_code": user.Username},
+		"accessToken": accessToken,
 	})
 }
 
@@ -127,12 +121,9 @@ func (h *AuthHandler) AdminLogin(c *gin.Context) {
 	}
 
 	setRefreshCookie(c, refreshToken, 30*24*60*60)
-	response.Raw(c, http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
-			"user":        gin.H{"id": adminUserID, "email": "admin@system", "full_name": "Administrator", "role": "admin"},
-			"accessToken": accessToken,
-		},
+	response.Success(c, http.StatusOK, "", gin.H{
+		"user":        gin.H{"id": adminUserID, "email": "admin@system", "full_name": "Administrator", "role": "admin"},
+		"accessToken": accessToken,
 	})
 }
 
@@ -162,12 +153,9 @@ func (h *AuthHandler) KepsekLogin(c *gin.Context) {
 	}
 
 	setRefreshCookie(c, refreshToken, 30*24*60*60)
-	response.Raw(c, http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
-			"user":        gin.H{"id": kepsekUserID, "email": "kepsek@system", "full_name": "Kepala Sekolah", "role": "kepala_sekolah"},
-			"accessToken": accessToken,
-		},
+	response.Success(c, http.StatusOK, "", gin.H{
+		"user":        gin.H{"id": kepsekUserID, "email": "kepsek@system", "full_name": "Kepala Sekolah", "role": "kepala_sekolah"},
+		"accessToken": accessToken,
 	})
 }
 
@@ -186,14 +174,14 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 	}
 
 	setRefreshCookie(c, newRefreshToken, 30*24*60*60)
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": gin.H{"accessToken": accessToken}})
+	response.Success(c, http.StatusOK, "", gin.H{"accessToken": accessToken})
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {
 	refreshToken, _ := c.Cookie("refreshToken")
 	_ = h.service.Logout(refreshToken)
 	setRefreshCookie(c, "", -1)
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Logout berhasil"})
+	response.Success(c, http.StatusOK, "Logout berhasil", nil)
 }
 
 func (h *AuthHandler) Protected(c *gin.Context) {
@@ -210,7 +198,7 @@ func (h *AuthHandler) Protected(c *gin.Context) {
 		return
 	}
 
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Akses diberikan ke sumber daya terlindungi", "data": data})
+	response.Success(c, http.StatusOK, "Akses diberikan ke sumber daya terlindungi", data)
 }
 
 func (h *AuthHandler) ForgotPassword(c *gin.Context) {
@@ -221,11 +209,7 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 	}
 
 	_ = h.service.ForgotPassword(req.Email, c.ClientIP())
-	response.Raw(c, http.StatusOK, gin.H{
-		"success": true,
-		"message": "Jika email terdaftar, kode OTP telah dikirim",
-		"data":    gin.H{"expires_in": 15 * time.Minute / time.Second},
-	})
+	response.Success(c, http.StatusOK, "Jika email terdaftar, kode OTP telah dikirim", gin.H{"expires_in": 15 * time.Minute / time.Second})
 }
 
 func (h *AuthHandler) VerifyOTP(c *gin.Context) {
@@ -240,7 +224,7 @@ func (h *AuthHandler) VerifyOTP(c *gin.Context) {
 		return
 	}
 
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "OTP valid"})
+	response.Success(c, http.StatusOK, "OTP valid", nil)
 }
 
 func (h *AuthHandler) ResetPassword(c *gin.Context) {
@@ -261,5 +245,5 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	}
 
 	utils.LogActivity(h.db, 0, "reset_password", "Perubahan kata sandi: "+req.Email, c.ClientIP(), c.Request.UserAgent())
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Kata sandi berhasil diubah"})
+	response.Success(c, http.StatusOK, "Kata sandi berhasil diubah", nil)
 }

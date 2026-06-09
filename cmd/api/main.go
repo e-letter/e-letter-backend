@@ -64,7 +64,8 @@ func main() {
 	notificationService := service.NewNotificationService(notificationRepo)
 	notificationHandler := handler.NewNotificationHandler(notificationService)
 
-	adminHandler := handler.NewAdminHandler(db)
+	adminSvc := service.NewAdminService(db)
+	adminHandler := handler.NewAdminHandler(adminSvc)
 
 	router := routes.SetupRouter(
 		cfg,

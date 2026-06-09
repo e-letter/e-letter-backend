@@ -63,7 +63,7 @@ func (h *PermissionHandler) GetRequests(c *gin.Context) {
 		response.Error(c, status, err.Error())
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": out})
+	response.Success(c, http.StatusOK, "", out)
 }
 
 func (h *PermissionHandler) CreateRequest(c *gin.Context) {
@@ -83,7 +83,7 @@ func (h *PermissionHandler) CreateRequest(c *gin.Context) {
 	}
 	userID := toIntFromContext(c, "userId")
 	utils.LogActivity(h.db, int64(userID), "create_request", "Pengajuan permohonan baru ID #"+strconv.Itoa(id), c.ClientIP(), c.Request.UserAgent())
-	response.Raw(c, http.StatusCreated, gin.H{"success": true, "data": gin.H{"request_id": id}})
+	response.Success(c, http.StatusCreated, "", gin.H{"request_id": id})
 }
 
 func (h *PermissionHandler) UpdateRequest(c *gin.Context) {
@@ -100,7 +100,7 @@ func (h *PermissionHandler) UpdateRequest(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "Failed to update request: "+err.Error())
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Request updated successfully"})
+	response.Success(c, http.StatusOK, "Request updated successfully", nil)
 }
 
 func (h *PermissionHandler) DeleteRequest(c *gin.Context) {
@@ -114,7 +114,7 @@ func (h *PermissionHandler) DeleteRequest(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "Failed to delete request: "+err.Error())
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Request deleted successfully"})
+	response.Success(c, http.StatusOK, "Request deleted successfully", nil)
 }
 
 func (h *PermissionHandler) Approve(c *gin.Context) {
@@ -133,7 +133,7 @@ func (h *PermissionHandler) Approve(c *gin.Context) {
 		return
 	}
 	utils.LogActivity(h.db, int64(userID), "approve_"+req.Status, "Permohonan #"+strconv.Itoa(req.RequestID)+" status: "+req.Status, c.ClientIP(), c.Request.UserAgent())
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Request processed successfully"})
+	response.Success(c, http.StatusOK, "Request processed successfully", nil)
 }
 
 func (h *PermissionHandler) ListRegistrationTokens(c *gin.Context) {
@@ -146,7 +146,7 @@ func (h *PermissionHandler) ListRegistrationTokens(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": rows})
+	response.Success(c, http.StatusOK, "", rows)
 }
 
 func (h *PermissionHandler) UpsertRegistrationToken(c *gin.Context) {
@@ -182,7 +182,7 @@ func (h *PermissionHandler) UpsertRegistrationToken(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": row})
+	response.Success(c, http.StatusOK, "", row)
 }
 
 func (h *PermissionHandler) CancelRequest(c *gin.Context) {
@@ -204,7 +204,7 @@ func (h *PermissionHandler) CancelRequest(c *gin.Context) {
 		return
 	}
 	utils.LogActivity(h.db, int64(userID), "cancel_request", "Pembatalan permohonan #"+strconv.Itoa(id), c.ClientIP(), c.Request.UserAgent())
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Permintaan berhasil dibatalkan"})
+	response.Success(c, http.StatusOK, "Permintaan berhasil dibatalkan", nil)
 }
 
 func (h *PermissionHandler) GetRequestDetail(c *gin.Context) {
@@ -220,7 +220,7 @@ func (h *PermissionHandler) GetRequestDetail(c *gin.Context) {
 		response.Error(c, http.StatusNotFound, "Permintaan tidak ditemukan")
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": detail})
+	response.Success(c, http.StatusOK, "", detail)
 }
 
 func (h *PermissionHandler) GetTeacherRoles(c *gin.Context) {
@@ -230,7 +230,7 @@ func (h *PermissionHandler) GetTeacherRoles(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": roles})
+	response.Success(c, http.StatusOK, "", roles)
 }
 
 func (h *PermissionHandler) RequestTeacherRole(c *gin.Context) {
@@ -255,7 +255,7 @@ func (h *PermissionHandler) RequestTeacherRole(c *gin.Context) {
 		return
 	}
 	utils.LogActivity(h.db, int64(userID), "request_teacher_role", "Permintaan peran guru: "+body.RoleName, c.ClientIP(), c.Request.UserAgent())
-	response.Raw(c, http.StatusCreated, gin.H{"success": true, "message": "Permintaan peran berhasil diajukan"})
+	response.Success(c, http.StatusCreated, "Permintaan peran berhasil diajukan", nil)
 }
 
 func (h *PermissionHandler) CreateDelegation(c *gin.Context) {
@@ -275,7 +275,7 @@ func (h *PermissionHandler) CreateDelegation(c *gin.Context) {
 		return
 	}
 	utils.LogActivity(h.db, int64(userID), "create_delegation", "Delegasi ke user ID #"+strconv.Itoa(body.DelegateUserID), c.ClientIP(), c.Request.UserAgent())
-	response.Raw(c, http.StatusCreated, gin.H{"success": true, "message": "Delegasi berhasil dibuat"})
+	response.Success(c, http.StatusCreated, "Delegasi berhasil dibuat", nil)
 }
 
 func (h *PermissionHandler) ListDelegations(c *gin.Context) {
@@ -285,7 +285,7 @@ func (h *PermissionHandler) ListDelegations(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": delegations})
+	response.Success(c, http.StatusOK, "", delegations)
 }
 
 func (h *PermissionHandler) DeleteDelegation(c *gin.Context) {
@@ -297,5 +297,5 @@ func (h *PermissionHandler) DeleteDelegation(c *gin.Context) {
 		return
 	}
 	utils.LogActivity(h.db, int64(userID), "delete_delegation", "Hapus delegasi ID #"+strconv.Itoa(id), c.ClientIP(), c.Request.UserAgent())
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "message": "Delegasi berhasil dihapus"})
+	response.Success(c, http.StatusOK, "Delegasi berhasil dihapus", nil)
 }

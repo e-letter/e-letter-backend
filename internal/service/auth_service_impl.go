@@ -295,7 +295,18 @@ func (s *authService) Logout(refreshToken string) error {
 }
 
 func (s *authService) ForgotPassword(email, ip string) error {
-	userID := 5
+	if strings.TrimSpace(email) == "" {
+		return errors.New("Email diperlukan")
+	}
+
+	user, err := s.repo.GetUserByEmail(email)
+	if err != nil {
+		return errors.New("Gagal memeriksa email")
+	}
+	if user == nil {
+		return errors.New("Email tidak ditemukan")
+	}
+
 	otp, err := generateSecureOTP()
 	if err != nil {
 		return err
@@ -303,7 +314,7 @@ func (s *authService) ForgotPassword(email, ip string) error {
 	otpHash := utils.HashToken(otp)
 	expiresAt := time.Now().Add(5 * time.Minute)
 
-	if err := s.repo.CreatePasswordResetToken(userID, otpHash, expiresAt, ip); err != nil {
+	if err := s.repo.CreatePasswordResetToken(user.ID, otpHash, expiresAt, ip); err != nil {
 		return err
 	}
 
@@ -315,10 +326,12 @@ func (s *authService) ForgotPassword(email, ip string) error {
 }
 
 func (s *authService) VerifyOTP(email, otp string) error {
-	realEmail := "krismawandi@guru.smk.belajar.id"
+	if strings.TrimSpace(email) == "" || strings.TrimSpace(otp) == "" {
+		return errors.New("Email dan OTP diperlukan")
+	}
 
 	otpHash := utils.HashToken(otp)
-	_, err := s.repo.VerifyPasswordResetOTP(realEmail, otpHash)
+	_, err := s.repo.VerifyPasswordResetOTP(email, otpHash)
 	if err != nil {
 		return errors.New("OTP tidak valid atau sudah kedaluwarsa")
 	}
@@ -326,15 +339,17 @@ func (s *authService) VerifyOTP(email, otp string) error {
 }
 
 func (s *authService) ResetPassword(email, otp, newPassword string) error {
-	realEmail := "krismawandi@guru.smk.belajar.id"
+	if strings.TrimSpace(email) == "" || strings.TrimSpace(otp) == "" || strings.TrimSpace(newPassword) == "" {
+		return errors.New("Email, OTP, dan kata sandi baru diperlukan")
+	}
 
 	otpHash := utils.HashToken(otp)
-	userID, err := s.repo.VerifyPasswordResetOTP(realEmail, otpHash)
+	userID, err := s.repo.VerifyPasswordResetOTP(email, otpHash)
 	if err != nil {
 		return errors.New("OTP tidak valid atau sudah kedaluwarsa")
 	}
 
-	if err := s.repo.MarkPasswordResetUsed(realEmail, otpHash); err != nil {
+	if err := s.repo.MarkPasswordResetUsed(email, otpHash); err != nil {
 		return err
 	}
 

@@ -49,13 +49,13 @@ func (h *LetterHandler) KepsekStats(c *gin.Context) {
 		_ = h.db.QueryRow(q.query).Scan(&n)
 		stats[q.key] = n
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": stats})
+	response.Success(c, http.StatusOK, "", stats)
 }
 
 func (h *LetterHandler) KepsekPending(c *gin.Context) {
 	userID := toIntFromContext(c, "userId")
 	if userID <= 0 {
-		response.Raw(c, http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Error(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -65,10 +65,7 @@ func (h *LetterHandler) KepsekPending(c *gin.Context) {
 		userID,
 	).Scan(&principalID)
 	if err != nil {
-		response.Raw(c, http.StatusOK, gin.H{
-			"success": true,
-			"data":    gin.H{"data": []any{}, "currentPage": 1, "totalPages": 0, "totalItems": 0},
-		})
+		response.Success(c, http.StatusOK, "", gin.H{"data": []any{}, "currentPage": 1, "totalPages": 0, "totalItems": 0})
 		return
 	}
 
@@ -85,7 +82,7 @@ func (h *LetterHandler) KepsekPending(c *gin.Context) {
 		  AND ra.status = 'pending'
 		  AND r.deleted_at IS NULL
 	`, principalID).Scan(&totalItems); err != nil {
-		response.Raw(c, http.StatusInternalServerError, gin.H{"error": "Failed to count pending: " + err.Error()})
+		response.Error(c, http.StatusInternalServerError, "Gagal memuat data")
 		return
 	}
 
@@ -119,7 +116,7 @@ func (h *LetterHandler) KepsekPending(c *gin.Context) {
 		LIMIT ? OFFSET ?
 	`, principalID, limit, offset)
 	if err != nil {
-		response.Raw(c, http.StatusInternalServerError, gin.H{"error": "Failed to fetch pending: " + err.Error()})
+		response.Error(c, http.StatusInternalServerError, "Gagal memuat data")
 		return
 	}
 	defer rows.Close()
@@ -154,7 +151,7 @@ func (h *LetterHandler) KepsekPending(c *gin.Context) {
 			&requestDate, &submittedAt, &startTime, &endTime,
 			&requesterName, &className, &code, &email,
 		); err != nil {
-			response.Raw(c, http.StatusInternalServerError, gin.H{"error": "Scan error: " + err.Error()})
+			response.Error(c, http.StatusInternalServerError, "Gagal memproses data")
 			return
 		}
 		start := "-"
@@ -181,7 +178,7 @@ func (h *LetterHandler) KepsekPending(c *gin.Context) {
 		})
 	}
 	if err := rows.Err(); err != nil {
-		response.Raw(c, http.StatusInternalServerError, gin.H{"error": err.Error()})
+		response.Error(c, http.StatusInternalServerError, "Gagal memproses data")
 		return
 	}
 
@@ -190,14 +187,11 @@ func (h *LetterHandler) KepsekPending(c *gin.Context) {
 		totalPages++
 	}
 
-	response.Raw(c, http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
-			"data":        items,
-			"currentPage": page,
-			"totalPages":  totalPages,
-			"totalItems":  totalItems,
-		},
+	response.Success(c, http.StatusOK, "", gin.H{
+		"data":        items,
+		"currentPage": page,
+		"totalPages":  totalPages,
+		"totalItems":  totalItems,
 	})
 }
 
@@ -207,25 +201,25 @@ func (h *LetterHandler) CreateTeacher(c *gin.Context) { h.create(c) }
 func (h *LetterHandler) create(c *gin.Context) {
 	var req domain.LetterCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Raw(c, http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	userID := toIntFromContext(c, "userId")
 	if userID <= 0 {
-		response.Raw(c, http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Error(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	id, err := h.service.Create(userID, req)
 	if err != nil {
 		if isValidationError(err) {
-			response.Raw(c, http.StatusBadRequest, gin.H{"error": err.Error()})
+			response.Error(c, http.StatusBadRequest, err.Error())
 			return
 		}
-		response.Raw(c, http.StatusInternalServerError, gin.H{"success": false, "error": "Gagal membuat surat: " + err.Error()})
+		response.Error(c, http.StatusInternalServerError, "Gagal membuat surat")
 		return
 	}
 	utils.LogActivity(h.db, int64(userID), "create_letter", "Pembuatan surat baru ID #"+strconv.Itoa(id), c.ClientIP(), c.Request.UserAgent())
-	response.Raw(c, http.StatusCreated, gin.H{"success": true, "data": gin.H{"request_id": id}})
+	response.Success(c, http.StatusCreated, "", gin.H{"request_id": id})
 }
 
 func (h *LetterHandler) StudentIzinMasuk(c *gin.Context)  { h.listStudent(c, "izin_masuk") }
@@ -238,31 +232,31 @@ func (h *LetterHandler) TeacherDispensasi(c *gin.Context) { h.listTeacher(c, "di
 func (h *LetterHandler) GeneralDispensasi(c *gin.Context) {
 	userID := toIntFromContext(c, "userId")
 	if userID <= 0 {
-		response.Raw(c, http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Error(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	page, limit := parsePagination(c)
 	resp, err := h.service.ListGeneralDispensasi("teacher", userID, page, limit)
 	if err != nil {
-		response.Raw(c, http.StatusInternalServerError, gin.H{"error": "Failed to fetch data: " + err.Error()})
+		response.Error(c, http.StatusInternalServerError, "Gagal memuat data")
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": resp})
+	response.Success(c, http.StatusOK, "", resp)
 }
 
 func (h *LetterHandler) TeacherLetters(c *gin.Context) {
 	userID := toIntFromContext(c, "userId")
 	if userID <= 0 {
-		response.Raw(c, http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Error(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	page, limit := parsePagination(c)
 	resp, err := h.service.ListTeacherLetters(userID, page, limit)
 	if err != nil {
-		response.Raw(c, http.StatusInternalServerError, gin.H{"error": "Failed to fetch data: " + err.Error()})
+		response.Error(c, http.StatusInternalServerError, "Gagal memuat data")
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": resp})
+	response.Success(c, http.StatusOK, "", resp)
 }
 
 func parsePagination(c *gin.Context) (int, int) {
@@ -283,66 +277,66 @@ func parsePagination(c *gin.Context) (int, int) {
 func (h *LetterHandler) listStudent(c *gin.Context, typeKey string) {
 	userID := toIntFromContext(c, "userId")
 	if userID <= 0 {
-		response.Raw(c, http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Error(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	page, limit := parsePagination(c)
 	resp, err := h.service.ListForStudent(userID, typeKey, page, limit)
 	if err != nil {
-		response.Raw(c, http.StatusInternalServerError, gin.H{"error": "Failed to fetch data: " + err.Error()})
+		response.Error(c, http.StatusInternalServerError, "Gagal memuat data")
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": resp})
+	response.Success(c, http.StatusOK, "", resp)
 }
 
 func (h *LetterHandler) listTeacher(c *gin.Context, typeKey string) {
 	userID := toIntFromContext(c, "userId")
 	if userID <= 0 {
-		response.Raw(c, http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Error(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	page, limit := parsePagination(c)
 	resp, err := h.service.ListForTeacherScoped(userID, typeKey, page, limit)
 	if err != nil {
 		if err.Error() == "forbidden: no active roles" {
-			response.Raw(c, http.StatusForbidden, gin.H{"error": "Anda tidak memiliki peran aktif"})
+			response.Error(c, http.StatusForbidden, "Anda tidak memiliki peran aktif")
 			return
 		}
-		response.Raw(c, http.StatusInternalServerError, gin.H{"error": "Failed to fetch data: " + err.Error()})
+		response.Error(c, http.StatusInternalServerError, "Gagal memuat data")
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": resp})
+	response.Success(c, http.StatusOK, "", resp)
 }
 
 func (h *LetterHandler) TeacherPending(c *gin.Context) {
 	userID := toIntFromContext(c, "userId")
 	if userID <= 0 {
-		response.Raw(c, http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Error(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	page, limit := parsePagination(c)
 	resp, err := h.service.ListPendingForTeacher(userID, page, limit)
 	if err != nil {
 		if err.Error() == "forbidden: no active roles" {
-			response.Raw(c, http.StatusForbidden, gin.H{"error": "Anda tidak memiliki peran aktif"})
+			response.Error(c, http.StatusForbidden, "Anda tidak memiliki peran aktif")
 			return
 		}
-		response.Raw(c, http.StatusInternalServerError, gin.H{"error": "Failed to fetch data: " + err.Error()})
+		response.Error(c, http.StatusInternalServerError, "Gagal memuat data")
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": resp})
+	response.Success(c, http.StatusOK, "", resp)
 }
 
 func (h *LetterHandler) TeacherStats(c *gin.Context) {
 	userID := toIntFromContext(c, "userId")
 	if userID <= 0 {
-		response.Raw(c, http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Error(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	stats, err := h.service.GetTeacherStats(userID)
 	if err != nil {
-		response.Raw(c, http.StatusInternalServerError, gin.H{"error": err.Error()})
+		response.Error(c, http.StatusInternalServerError, "Gagal memuat statistik")
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": stats})
+	response.Success(c, http.StatusOK, "", stats)
 }

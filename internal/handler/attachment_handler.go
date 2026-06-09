@@ -25,16 +25,16 @@ func (h *AttachmentHandler) GetByID(c *gin.Context) {
 	attachment, err := h.service.GetByID(id)
 	if err != nil {
 		if err.Error() == "Invalid attachment ID" {
-			response.Raw(c, http.StatusBadRequest, gin.H{"error": err.Error()})
+			response.Error(c, http.StatusBadRequest, err.Error())
 			return
 		}
-		response.Raw(c, http.StatusNotFound, gin.H{"error": "Attachment not found"})
+		response.Error(c, http.StatusNotFound, "Attachment tidak ditemukan")
 		return
 	}
 
 	userID := toIntFromContext(c, "userId")
 	if userID <= 0 {
-		response.Raw(c, http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		response.Error(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -43,13 +43,13 @@ func (h *AttachmentHandler) GetByID(c *gin.Context) {
 	cleanPath := filepath.Clean(filePath)
 	baseDir := filepath.Clean("public")
 	if !strings.HasPrefix(cleanPath, baseDir+string(filepath.Separator)) && cleanPath != baseDir {
-		response.Raw(c, http.StatusForbidden, gin.H{"error": "Invalid file path"})
+		response.Error(c, http.StatusForbidden, "Akses ditolak")
 		return
 	}
 
 	buf, readErr := os.ReadFile(cleanPath)
 	if readErr != nil {
-		response.Raw(c, http.StatusNotFound, gin.H{"error": "File not found"})
+		response.Error(c, http.StatusNotFound, "File tidak ditemukan")
 		return
 	}
 
@@ -69,13 +69,13 @@ func (h *AttachmentHandler) ListByRequest(c *gin.Context) {
 	items, err := h.service.GetByRequestID(requestID)
 	if err != nil {
 		if err.Error() == "Invalid request ID" {
-			response.Raw(c, http.StatusBadRequest, gin.H{"error": err.Error()})
+			response.Error(c, http.StatusBadRequest, err.Error())
 			return
 		}
-		response.Raw(c, http.StatusInternalServerError, gin.H{"success": false, "error": "Error retrieving attachments: " + err.Error()})
+		response.Error(c, http.StatusInternalServerError, "Gagal mengambil lampiran")
 		return
 	}
-	response.Raw(c, http.StatusOK, gin.H{"success": true, "data": items})
+	response.Success(c, http.StatusOK, "", items)
 }
 
 func (h *AttachmentHandler) Upload(c *gin.Context) {
@@ -116,5 +116,5 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	response.Raw(c, http.StatusCreated, gin.H{"success": true, "data": gin.H{"id": id, "file_path": filePath}})
+	response.Success(c, http.StatusCreated, "", gin.H{"id": id, "file_path": filePath})
 }

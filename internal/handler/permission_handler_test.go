@@ -24,7 +24,7 @@ type mockPermissionService struct {
 
 var _ service.PermissionService = (*mockPermissionService)(nil)
 
-func (m *mockPermissionService) Get(_, _, _ string, _ int, _ int, _, _ string) (any, error) {
+func (m *mockPermissionService) Get(_, _, _ string, _, _ int, _, _, _, _, _ string, _, _ int) (any, error) {
 	return nil, nil
 }
 func (m *mockPermissionService) Create(_ domain.CreatePermissionRequest) (int, error) { return 0, nil }
