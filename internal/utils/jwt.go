@@ -1,7 +1,9 @@
 package utils
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -37,6 +39,13 @@ func GenerateTokenFull(secret string, userID int, email string, role string, mai
 	if mainRole == "" {
 		mainRole = mapRoleToMainRole(role)
 	}
+
+	var idBytes [16]byte
+	if _, err := rand.Read(idBytes[:]); err == nil {
+		idBytes[0] = byte(now.UnixNano())
+	}
+	jti := hex.EncodeToString(idBytes[:])
+
 	claims := TokenClaims{
 		UserID:            userID,
 		Email:             email,
@@ -46,6 +55,7 @@ func GenerateTokenFull(secret string, userID int, email string, role string, mai
 		IsProfileComplete: isProfileComplete,
 		Type:              tokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        jti,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(expiresIn)),
 		},

@@ -489,7 +489,7 @@ func (r *authRepository) GetTeacherSubRoles(userID int) []string {
 		SELECT tr.role_name
 		FROM teacher_roles tr
 		JOIN teacher_profiles tp ON tp.id = tr.teacher_id
-		WHERE tp.user_id = ? AND tr.status = 'active'
+		WHERE tp.user_id = ? AND tr.status IN ('active', 'approved')
 	`, userID)
 	if err != nil {
 		return []string{}

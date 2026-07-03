@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Refliqx/backend-eletter/internal/domain"
@@ -127,11 +128,28 @@ func (h *PermissionHandler) Approve(c *gin.Context) {
 	}
 	userID := toIntFromContext(c, "userId")
 	if err := h.service.Approve(req, userID); err != nil {
-		if req.RequestID == 0 || req.StageID == 0 || req.Status == "" || err.Error() == "invalid status: must be approved, rejected, or skipped" {
-			response.Error(c, http.StatusBadRequest, err.Error())
+		serverErrPrefixes := []string{
+			"resolve approver profiles",
+			"check kapro role",
+			"check tatib role",
+			"check tu role",
+			"check delegation",
+			"fetch teacher signature",
+			"fetch principal signature",
+		}
+		errMsg := err.Error()
+		isServerError := false
+		for _, prefix := range serverErrPrefixes {
+			if strings.HasPrefix(errMsg, prefix) {
+				isServerError = true
+				break
+			}
+		}
+		if isServerError {
+			response.Error(c, http.StatusInternalServerError, "Gagal memproses persetujuan")
 			return
 		}
-		response.Error(c, http.StatusInternalServerError, "Failed to process approval: "+err.Error())
+		response.Error(c, http.StatusBadRequest, errMsg)
 		return
 	}
 	utils.LogActivity(h.db, int64(userID), "approve_"+req.Status, "Permohonan #"+strconv.Itoa(req.RequestID)+" status: "+req.Status, c.ClientIP(), c.Request.UserAgent())
